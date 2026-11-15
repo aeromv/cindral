@@ -1,0 +1,25 @@
+[package]
+name = "cindral-net"
+description = "Async Minecraft 1.8 connection: server list ping, offline-mode login, keepalive, clean disconnect."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+cindral-auth.workspace = true
+cindral-protocol.workspace = true
+
+[[bin]]
+name = "cindral-headless"
+path = "src/bin/headless.rs"
+
+[lints]
+workspace = true

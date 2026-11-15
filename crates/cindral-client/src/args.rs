@@ -1,0 +1,1123 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Command-line arguments for `cindral-client`.
+//!
+//! Five modes are available: the windowed client (the default), the headless
+//! screenshot path (`--screenshot PATH`), the headless scripted session
+//! (`--headless`) that spec §11 wants for the integration suite, the
+//! server-less UI acceptance run (`--ui-demo`), and the server-less M5/M6 block
+//! acceptance run (`--block-demo`).
+
+use std::path::PathBuf;
+use std::time::Duration;
+
+/// The acceptance camera views for `--block-demo`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DemoView {
+    /// The existing four-row camera plus the new M6 wing.
+    Overview,
+    /// Ground/AO/water at noon.
+    Day,
+    /// Same camera at midnight.
+    Night,
+    /// Inside the cave looking at the glowstone falloff.
+    Cave,
+    /// Close-up of water/glass/leaves against stone.
+    Transparency,
+    /// View of entities from behind.
+    Back,
+    /// Close-up of player dual-layer clothing (Steve & Alex).
+    Closeup,
+    /// Walk cycle animation decomposition showing leg/arm swinging phases.
+    WalkCycle,
+    /// Exhibition lineup of all Minecraft 1.8 mobs.
+    Mobs,
+}
+
+impl DemoView {
+    /// Parses a view name, returning an error for unknown values.
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "overview" => Ok(Self::Overview),
+            "day" => Ok(Self::Day),
+            "night" => Ok(Self::Night),
+            "cave" => Ok(Self::Cave),
+            "transparency" => Ok(Self::Transparency),
+            "back" => Ok(Self::Back),
+            "closeup" => Ok(Self::Closeup),
+            "walk-cycle" | "walk" => Ok(Self::WalkCycle),
+            "mobs" | "all" | "all-mobs" => Ok(Self::Mobs),
+            other => Err(format!(
+                "unknown demo view {other:?}; must be one of overview, day, night, cave, transparency, back, closeup, walk-cycle, mobs"
+            )),
+        }
+    }
+
+    /// Returns the default world time in ticks for this view.
+    pub fn default_time(self) -> i64 {
+        match self {
+            Self::Overview | Self::Back | Self::Closeup | Self::WalkCycle | Self::Mobs => 6000,
+            Self::Day => 6000,
+            Self::Night => 18000,
+            Self::Cave => 6000,
+            Self::Transparency => 6000,
+        }
+    }
+
+    /// Returns the view name as a static string.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Overview => "overview",
+            Self::Day => "day",
+            Self::Night => "night",
+            Self::Cave => "cave",
+            Self::Transparency => "transparency",
+            Self::Back => "back",
+            Self::Closeup => "closeup",
+            Self::WalkCycle => "walk-cycle",
+            Self::Mobs => "mobs",
+        }
+    }
+}
+
+/// Usage text shown by `--help` and on argument errors.
+pub const USAGE: &str = "\
+usage: cindral [<host> <port>] [options]
+       cindral --ui-demo [--screenshot PATH] [options]
+       cindral --hud-demo [--hud-view NAME] [--screenshot PATH] [options]
+       cindral --block-demo [--screenshot PATH] [options]
+       cindral --entity-demo [--screenshot PATH] [options]
+       cindral --bench-scene [--bench-origin N] [--bench-frames N] [options]
+  <host> <port>       Minecraft 1.8 server (protocol 47). The window connects to it
+                      at start; without it the window opens on the title screen.
+                      Required with --headless and --screenshot; not needed with
+                      --ui-demo, --hud-demo, --block-demo or --entity-demo
+
+options:
+  --name NAME         offline username (default: cindral)
+  --username NAME --uuid UUID --accessToken TOKEN
+                      launcher session: log in to online-mode servers
+                      (also CINDRAL_USERNAME, CINDRAL_UUID, CINDRAL_ACCESS_TOKEN)
+  --view-distance N   requested chunk view distance, 2-16 (default: 8)
+  --preset NAME       video preset low, medium, high or pvp; low suits a machine
+                      without a graphics card, pvp a fast sharp picture at
+                      render distance 4 (also used by --bench-scene)
+  --screenshot PATH   render one offscreen PNG to PATH instead of opening a window
+  --collect-secs N    world collection time for screenshots (default: 8)
+  --headless          run a scripted session without a window and print a report
+  --play-secs N       duration of the headless session (default: 60)
+  --script NAME       headless script: default (walk, break, place), idle, or
+                      movement (the 60 s parity-harness script), or combat (the
+                      60 s combat script: strikes, a use, a jump strike)
+  --handshake-host H  address sent in the handshake instead of <host> (to record a
+                      session with cindral-packet-logger on a public server)
+  --chat MESSAGE      chat line the headless session sends when it is placed
+  --ui-demo           drive the scripted M4 debug screen without a server or GPU;
+                      combine with --screenshot to render the same screen offscreen
+  --hud-demo          build the M10 HUD (styled chat, sidebar, tab list, title,
+                      action bar) and the options screens from scripted server
+                      packets; no server or GPU unless --screenshot is given
+  --hud-view NAME     scene of --hud-demo: overview, tab, chat, menu, options,
+                      controls, chat-options, title, servers (default: overview)
+  --synthetic-panorama  with --hud-demo --hud-view title: draw generated gradient
+                      faces instead of the panorama of the user's jar
+  --block-demo        mesh and report the M5/M6 acceptance blocks from the official
+                      1.8.8 jar; no server or GPU unless --screenshot is given
+  --bench-scene       draw a fixed synthetic world along a scripted camera path
+                      offscreen and print the frame time (mean, p95, p99) and the
+                      GPU time per group; no server (F2-0c)
+  --bench-origin N    centre of --bench-scene on both axes, in blocks (default: 0;
+                      try 1000000 to test precision far from the origin)
+  --bench-frames N    measured frames of --bench-scene (default: 600)
+  --bench-no-cave-culling  draw --bench-scene without cave culling (to compare)
+  --bench-no-merge    mesh --bench-scene without face merging (to compare)
+  --bench-no-facing-cull  draw --bench-scene without facing culling (to compare)
+  --bench-fast-render draw --bench-scene with Fast Render on (to compare)
+  --bench-entities N  stand N entities (armoured players, armor stands, zombies,
+                      cows) around --bench-scene and mesh them every frame
+  --bench-in-flight N frames --bench-scene keeps in flight, 0-3 (default 0: wait
+                      for the GPU after every frame); 1 or 2 time the steady
+                      frame rate of a window, where CPU and GPU overlap
+  --bench-workers N   mesh workers of --bench-stream (default 0: automatic)
+  --bench-stream      with --bench-scene: load the world as one burst of chunks
+                      through the real mesh pool and report the frames meanwhile
+  --entity-demo       mesh and report the M8 acceptance entities (Steve, Alex,
+                      Zombie, Cow, Item); no server or GPU unless --screenshot is given
+  --mob NAME          render a single mob by name (e.g. creeper, zombie, cow, or 'list')
+  --dump-mobs DIR     render each mob individually 1-by-1 to PNG images in DIR
+  --perf-log PATH     write fps, CPU per stage and GPU per group to PATH once a
+                      second while playing (to see where a real game's frames go)
+  --resource-pack PATH path to a resource pack directory or .zip (repeatable)
+  --setup-assets      download and verify official 1.8.8 assets then exit
+  --no-audio          start without the sound engine (no device, no thread)
+  --audio-probe       play a few sound events on the system device and exit
+  --time N            world time in ticks (signed; default: 6000 noon)
+  --demo-view NAME    acceptance camera: overview, day, night, cave, transparency,
+                      back, closeup, walk-cycle, mobs (default: overview)
+  --width N           framebuffer width (default: 1280)
+  --height N          framebuffer height (default: 720)
+  --help, -h          print this help";
+
+/// The scenes of `--hud-demo`.
+pub const HUD_VIEWS: [&str; 24] = [
+    "overview",
+    "tab",
+    "chat",
+    "menu",
+    "options",
+    "video",
+    "controls",
+    "chat-options",
+    "sounds",
+    "skin",
+    "language",
+    "packs",
+    "title",
+    "title-modern",
+    "servers",
+    "server-edit",
+    "connecting",
+    "disconnected",
+    "stats",
+    "stats-blocks",
+    "stats-items",
+    "achievements",
+    "mods",
+    "mods_list",
+];
+
+/// The scripted sessions the headless mode knows.
+pub const SCRIPTS: [&str; 4] = ["default", "idle", "movement", "combat"];
+
+/// The top-level mode selected by the parsed arguments.
+///
+/// [`Args::mode`] fixes the dispatch precedence: a UI demo wins over the block
+/// demo, which wins over the entity demo, which wins over the headless session,
+/// which wins over the terrain screenshot, which wins over the windowed client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// The interactive windowed client.
+    Windowed,
+    /// The offscreen terrain screenshot.
+    Screenshot,
+    /// The reproducible benchmark scene (F2-0c).
+    BenchScene,
+    /// The scripted headless session.
+    Headless,
+    /// The server-less scripted UI acceptance run.
+    UiDemo,
+    /// The server-less M10 HUD, chat and options acceptance run.
+    HudDemo,
+    /// The server-less M5 block-model acceptance run.
+    BlockDemo,
+    /// The server-less M8 entity acceptance run.
+    EntityDemo,
+    /// First-run download and verification of official assets.
+    SetupAssets,
+    /// Plays a few sounds on the system audio device and exits.
+    AudioProbe,
+}
+
+/// Parsed client options.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Args {
+    /// Server host name or IP; `None` in the server-less UI demo mode.
+    pub host: Option<String>,
+    /// Server port; `None` in the server-less UI demo mode.
+    pub port: Option<u16>,
+    /// Offline-mode username.
+    pub name: String,
+    /// The launcher session of `--username`, `--uuid` and `--accessToken`;
+    /// filled by `main` (see [`crate::launch_session`]), `None` = offline.
+    pub session: Option<cindral_auth::Session>,
+    /// Requested chunk view distance.
+    pub view_distance: u8,
+    /// Offscreen output path; `None` opens a window.
+    pub screenshot: Option<PathBuf>,
+    /// How long to collect chunks before a screenshot.
+    pub collect: Duration,
+    /// Whether the scripted headless session is requested.
+    pub headless: bool,
+    /// How long the headless session plays.
+    pub play: Duration,
+    /// The scripted session of the headless mode.
+    pub script: String,
+    /// A chat line the headless session sends once the player is placed.
+    pub chat: Option<String>,
+    /// The address written in the `Handshake`, when it differs from `host`
+    /// (a packet logger on `127.0.0.1` in front of a server that checks it).
+    pub handshake_host: Option<String>,
+    /// Whether the server-less scripted UI acceptance run is requested.
+    pub ui_demo: bool,
+    /// Whether the server-less M10 HUD acceptance run is requested.
+    pub hud_demo: bool,
+    /// The scene of `--hud-demo`; one of [`HUD_VIEWS`].
+    pub hud_view: String,
+    /// Use generated gradient faces for the title panorama of `--hud-demo`.
+    pub synthetic_panorama: bool,
+    /// Whether the server-less M5/M6 block acceptance run is requested.
+    pub block_demo: bool,
+    /// Whether the reproducible benchmark scene is requested (F2-0c).
+    pub bench_scene: bool,
+    /// X and Z, in blocks, of the centre of the benchmark scene.
+    pub bench_origin: i32,
+    /// Measured frames of the benchmark scene.
+    pub bench_frames: u32,
+    /// Whether the benchmark scene draws without cave culling (F2-3d).
+    pub bench_no_cave_culling: bool,
+    /// Whether the benchmark scene meshes without face merging (to compare).
+    pub bench_no_merge: bool,
+    /// Whether the benchmark scene draws without facing culling (to compare).
+    pub bench_no_facing_cull: bool,
+    /// Whether the benchmark scene draws with Fast Render on (to compare).
+    pub bench_fast_render: bool,
+    /// Entities the benchmark scene stands around its camera path.
+    pub bench_entities: u16,
+    /// Frames the benchmark keeps in flight (0: wait after every frame).
+    pub bench_in_flight: u8,
+    /// Whether the benchmark loads its world as a burst of chunks through the
+    /// real meshing pipeline and measures the frames meanwhile (F2-4).
+    pub bench_stream: bool,
+    /// Mesh workers of `--bench-stream`; `0` is automatic.
+    pub bench_workers: u8,
+    /// Whether the server-less M8 entity acceptance run is requested.
+    pub entity_demo: bool,
+    /// Specific mob name to view or screenshot in entity demo (e.g. "creeper", "cow").
+    pub mob: Option<String>,
+    /// Directory to export individual PNG screenshots of all mobs 1 by 1.
+    pub dump_mobs: Option<PathBuf>,
+    /// Where the window writes its once-a-second performance log.
+    pub perf_log: Option<PathBuf>,
+    /// Whether asset setup/download was explicitly requested.
+    pub setup_assets: bool,
+    /// Whether the sound engine stays off (`--no-audio`).
+    pub no_audio: bool,
+    /// Whether the audio probe was requested (`--audio-probe`).
+    pub audio_probe: bool,
+    /// Active resource pack paths, layered in argument order.
+    pub resource_packs: Vec<PathBuf>,
+    /// World time in ticks (signed; default: 6000 noon). Only used by `--block-demo`.
+    pub time: i64,
+    /// Acceptance camera view for `--block-demo`.
+    pub demo_view: DemoView,
+    /// The video preset of `--preset`, applied over the saved options.
+    pub preset: Option<crate::options::VideoPreset>,
+    /// Framebuffer width.
+    pub width: u32,
+    /// Framebuffer height.
+    pub height: u32,
+}
+
+impl Args {
+    /// The server endpoint, when this mode talks to a server.
+    ///
+    /// A server-less demo without positional arguments has no endpoint; every
+    /// other mode is rejected by [`Self::parse`] before it reaches this method.
+    #[must_use]
+    pub fn server(&self) -> Option<(&str, u16)> {
+        match (self.host.as_deref(), self.port) {
+            (Some(host), Some(port)) => Some((host, port)),
+            _ => None,
+        }
+    }
+
+    /// The dispatch mode of these arguments.
+    ///
+    /// `--ui-demo` wins over `--block-demo`; the block demo wins over
+    /// `--entity-demo`; the entity demo wins over `--headless` and `--screenshot`;
+    /// `--headless` wins over `--screenshot`.
+    #[must_use]
+    pub fn mode(&self) -> Mode {
+        if self.setup_assets {
+            Mode::SetupAssets
+        } else if self.audio_probe {
+            Mode::AudioProbe
+        } else if self.ui_demo {
+            Mode::UiDemo
+        } else if self.hud_demo {
+            Mode::HudDemo
+        } else if self.block_demo {
+            Mode::BlockDemo
+        } else if self.bench_scene {
+            Mode::BenchScene
+        } else if self.entity_demo || self.mob.is_some() || self.dump_mobs.is_some() {
+            Mode::EntityDemo
+        } else if self.headless {
+            Mode::Headless
+        } else if self.screenshot.is_some() {
+            Mode::Screenshot
+        } else {
+            Mode::Windowed
+        }
+    }
+
+    /// Parses argv-style words (without the program name).
+    ///
+    /// # Errors
+    /// A human-readable message including [`USAGE`] for missing values,
+    /// unknown flags, or out-of-range numbers.
+    pub fn parse(words: &[String]) -> Result<Self, String> {
+        let help = || format!("missing/invalid arguments\n{USAGE}");
+        let mut host = None;
+        let mut port = None;
+        let mut name = "cindral".to_string();
+        let mut view_distance = 8_u8;
+        let mut screenshot = None;
+        let mut collect_secs = 8.0_f64;
+        let mut headless = false;
+        let mut play_secs = 60.0_f64;
+        let mut script = "default".to_string();
+        let mut chat = None;
+        let mut handshake_host = None;
+        let mut ui_demo = false;
+        let mut hud_demo = false;
+        let mut synthetic_panorama = false;
+        let mut hud_view = HUD_VIEWS[0].to_string();
+        let mut block_demo = false;
+        let mut bench_scene = false;
+        let mut bench_origin = 0_i32;
+        let mut bench_frames = 600_u32;
+        let mut bench_no_cave_culling = false;
+        let mut bench_no_merge = false;
+        let mut bench_no_facing_cull = false;
+        let mut bench_fast_render = false;
+        let mut bench_entities = 0_u16;
+        let mut bench_in_flight = 0_u8;
+        let mut bench_stream = false;
+        let mut bench_workers = 0_u8;
+        let mut entity_demo = false;
+        let mut mob = None;
+        let mut dump_mobs = None;
+        let mut perf_log = None;
+        let mut setup_assets = false;
+        let mut no_audio = false;
+        let mut audio_probe = false;
+        let mut resource_packs = Vec::new();
+        let mut time = 6000_i64;
+        let mut demo_view = DemoView::Overview;
+        let mut preset = None;
+        let mut width = 1280_u32;
+        let mut height = 720_u32;
+
+        let mut index = 0;
+        while index < words.len() {
+            match words[index].as_str() {
+                "--help" | "-h" => return Err(USAGE.to_string()),
+                "--name" => {
+                    name = words.get(index + 1).ok_or_else(help)?.clone();
+                    index += 2;
+                }
+                "--view-distance" => {
+                    view_distance = parse_number(words.get(index + 1), "--view-distance")?;
+                    index += 2;
+                }
+                "--screenshot" => {
+                    let value = words.get(index + 1).ok_or_else(help)?;
+                    if value.is_empty() {
+                        return Err(format!("--screenshot needs a path\n{USAGE}"));
+                    }
+                    screenshot = Some(PathBuf::from(value));
+                    index += 2;
+                }
+                "--collect-secs" => {
+                    collect_secs = parse_number(words.get(index + 1), "--collect-secs")?;
+                    index += 2;
+                }
+                "--headless" => {
+                    headless = true;
+                    index += 1;
+                }
+                "--play-secs" => {
+                    play_secs = parse_number(words.get(index + 1), "--play-secs")?;
+                    index += 2;
+                }
+                "--script" => {
+                    let value = words.get(index + 1).ok_or_else(help)?;
+                    if !SCRIPTS.contains(&value.as_str()) {
+                        return Err(format!(
+                            "--script must be one of {SCRIPTS:?}, got {value:?}\n{USAGE}"
+                        ));
+                    }
+                    script = value.clone();
+                    index += 2;
+                }
+                "--handshake-host" => {
+                    handshake_host = Some(words.get(index + 1).ok_or_else(help)?.clone());
+                    index += 2;
+                }
+                "--chat" => {
+                    let value = words.get(index + 1).ok_or_else(help)?;
+                    chat = Some(value.clone());
+                    index += 2;
+                }
+                "--ui-demo" => {
+                    ui_demo = true;
+                    index += 1;
+                }
+                "--hud-demo" => {
+                    hud_demo = true;
+                    index += 1;
+                }
+                "--synthetic-panorama" => {
+                    synthetic_panorama = true;
+                    index += 1;
+                }
+                "--hud-view" => {
+                    let value = words.get(index + 1).ok_or_else(help)?;
+                    if !HUD_VIEWS.contains(&value.as_str()) {
+                        return Err(format!(
+                            "--hud-view must be one of {}, got {value}\n{USAGE}",
+                            HUD_VIEWS.join(", ")
+                        ));
+                    }
+                    hud_view = value.clone();
+                    index += 2;
+                }
+                "--block-demo" => {
+                    block_demo = true;
+                    index += 1;
+                }
+                "--bench-scene" => {
+                    bench_scene = true;
+                    index += 1;
+                }
+                "--bench-origin" => {
+                    bench_origin = parse_number(words.get(index + 1), "--bench-origin")?;
+                    index += 2;
+                }
+                "--bench-workers" => {
+                    bench_workers = parse_number(words.get(index + 1), "--bench-workers")?;
+                    index += 2;
+                }
+                "--bench-stream" => {
+                    bench_stream = true;
+                    index += 1;
+                }
+                "--bench-no-cave-culling" => {
+                    bench_no_cave_culling = true;
+                    index += 1;
+                }
+                "--bench-no-merge" => {
+                    bench_no_merge = true;
+                    index += 1;
+                }
+                "--bench-no-facing-cull" => {
+                    bench_no_facing_cull = true;
+                    index += 1;
+                }
+                "--bench-fast-render" => {
+                    bench_fast_render = true;
+                    index += 1;
+                }
+                "--bench-entities" => {
+                    bench_entities = parse_number(words.get(index + 1), "--bench-entities")?;
+                    index += 2;
+                }
+                "--bench-in-flight" => {
+                    bench_in_flight =
+                        parse_number::<u8>(words.get(index + 1), "--bench-in-flight")?.min(3);
+                    index += 2;
+                }
+                "--bench-frames" => {
+                    bench_frames = parse_number(words.get(index + 1), "--bench-frames")?;
+                    index += 2;
+                }
+                "--entity-demo" => {
+                    entity_demo = true;
+                    index += 1;
+                }
+                "--mob" => {
+                    let value = words.get(index + 1).ok_or_else(help)?;
+                    if value.is_empty() {
+                        return Err(format!("--mob needs a name\n{USAGE}"));
+                    }
+                    mob = Some(value.clone());
+                    index += 2;
+                }
+                "--dump-mobs" => {
+                    let value = words.get(index + 1).ok_or_else(help)?;
+                    if value.is_empty() {
+                        return Err(format!("--dump-mobs needs a directory path\n{USAGE}"));
+                    }
+                    dump_mobs = Some(PathBuf::from(value));
+                    index += 2;
+                }
+                "--perf-log" => {
+                    let value = words.get(index + 1).ok_or_else(help)?;
+                    if value.is_empty() {
+                        return Err(format!("--perf-log needs a file path\n{USAGE}"));
+                    }
+                    perf_log = Some(PathBuf::from(value));
+                    index += 2;
+                }
+                "--setup-assets" => {
+                    setup_assets = true;
+                    index += 1;
+                }
+                "--no-audio" => {
+                    no_audio = true;
+                    index += 1;
+                }
+                "--audio-probe" => {
+                    audio_probe = true;
+                    index += 1;
+                }
+                "--resource-pack" => {
+                    let value = words.get(index + 1).ok_or_else(help)?;
+                    if value.is_empty() {
+                        return Err(format!("--resource-pack needs a path\n{USAGE}"));
+                    }
+                    resource_packs.push(PathBuf::from(value));
+                    index += 2;
+                }
+                "--time" => {
+                    time = parse_number(words.get(index + 1), "--time")?;
+                    index += 2;
+                }
+                "--preset" => {
+                    let value = words.get(index + 1).ok_or_else(help)?;
+                    preset = Some(crate::options::VideoPreset::parse(value).ok_or_else(|| {
+                        format!("--preset must be low, medium, high or pvp, got {value}\n{USAGE}")
+                    })?);
+                    index += 2;
+                }
+                "--demo-view" => {
+                    let value = words.get(index + 1).ok_or_else(help)?;
+                    demo_view = DemoView::parse(value)?;
+                    index += 2;
+                }
+                "--width" => {
+                    width = parse_number(words.get(index + 1), "--width")?;
+                    index += 2;
+                }
+                "--height" => {
+                    height = parse_number(words.get(index + 1), "--height")?;
+                    index += 2;
+                }
+                other if host.is_none() => {
+                    host = Some(other.to_string());
+                    index += 1;
+                }
+                other if port.is_none() => {
+                    port =
+                        Some(other.parse().map_err(|_| {
+                            format!("port must be 1-65535, got {other:?}\n{USAGE}")
+                        })?);
+                    index += 1;
+                }
+                other => return Err(format!("unexpected argument {other:?}\n{USAGE}")),
+            }
+        }
+
+        if port == Some(0) {
+            return Err(format!("port must be 1-65535\n{USAGE}"));
+        }
+        if !(2..=16).contains(&view_distance) {
+            return Err(format!(
+                "--view-distance must be 2-16, got {view_distance}\n{USAGE}"
+            ));
+        }
+        if !(0.2..=300.0).contains(&collect_secs) {
+            return Err(format!(
+                "--collect-secs must be 0.2-300, got {collect_secs}\n{USAGE}"
+            ));
+        }
+        if !(1.0..=3600.0).contains(&play_secs) {
+            return Err(format!(
+                "--play-secs must be 1-3600, got {play_secs}\n{USAGE}"
+            ));
+        }
+        if !(1..=100_000).contains(&bench_frames) {
+            return Err(format!(
+                "--bench-frames must be 1-100000, got {bench_frames}\n{USAGE}"
+            ));
+        }
+        if bench_origin.unsigned_abs() > 29_000_000 {
+            return Err(format!(
+                "--bench-origin must be within 29000000 of 0, got {bench_origin}\n{USAGE}"
+            ));
+        }
+        if !(64..=7680).contains(&width) || !(64..=4320).contains(&height) {
+            return Err(format!(
+                "framebuffer must be 64-7680 × 64-4320, got {width}×{height}\n{USAGE}"
+            ));
+        }
+
+        // The demos and the windowed client can run without a server: the
+        // window then opens on the title screen (ADR-0044). Headless and
+        // screenshot sessions keep the M1-M3 contract of an explicit host and
+        // port, and a lone host is never accepted.
+        let serverless_demo = ui_demo
+            || hud_demo
+            || block_demo
+            || bench_scene
+            || entity_demo
+            || mob.is_some()
+            || dump_mobs.is_some()
+            || setup_assets
+            || audio_probe;
+        let title_screen = !headless && screenshot.is_none();
+        let complete = host.is_some() && port.is_some();
+        let absent = host.is_none() && port.is_none();
+        if !(serverless_demo || complete || (absent && title_screen)) {
+            return Err(help());
+        }
+
+        Ok(Self {
+            host,
+            port,
+            name,
+            session: None,
+            view_distance,
+            screenshot,
+            collect: Duration::from_secs_f64(collect_secs),
+            headless,
+            play: Duration::from_secs_f64(play_secs),
+            script,
+            chat,
+            handshake_host,
+            ui_demo,
+            hud_demo,
+            hud_view,
+            synthetic_panorama,
+            block_demo,
+            bench_scene,
+            bench_origin,
+            bench_frames,
+            bench_no_cave_culling,
+            bench_no_merge,
+            bench_no_facing_cull,
+            bench_fast_render,
+            bench_entities,
+            bench_in_flight,
+            bench_stream,
+            bench_workers,
+            entity_demo,
+            mob,
+            dump_mobs,
+            perf_log,
+            setup_assets,
+            no_audio,
+            audio_probe,
+            resource_packs,
+            time,
+            demo_view,
+            preset,
+            width,
+            height,
+        })
+    }
+}
+
+fn parse_number<T>(value: Option<&String>, flag: &str) -> Result<T, String>
+where
+    T: std::str::FromStr,
+{
+    value
+        .ok_or_else(|| format!("{flag} expects a value\n{USAGE}"))?
+        .parse()
+        .map_err(|_| format!("{flag} expects a number\n{USAGE}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn words(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn the_handshake_host_is_kept_for_the_packet_logger() {
+        let args = Args::parse(&words(&[
+            "127.0.0.1",
+            "25600",
+            "--handshake-host",
+            "play.example.net",
+        ]))
+        .expect("valid");
+        assert_eq!(args.handshake_host.as_deref(), Some("play.example.net"));
+        let plain = Args::parse(&words(&["127.0.0.1", "25600"])).expect("valid");
+        assert_eq!(plain.handshake_host, None);
+    }
+
+    #[test]
+    fn the_window_opens_on_the_title_screen_without_a_server() {
+        let args = Args::parse(&words(&[])).expect("valid");
+        assert_eq!(args.mode(), Mode::Windowed);
+        assert_eq!(args.server(), None);
+        let named = Args::parse(&words(&["--name", "Pixel"])).expect("valid");
+        assert_eq!(named.server(), None);
+        assert_eq!(named.name, "Pixel");
+    }
+
+    #[test]
+    fn headless_and_screenshot_sessions_still_need_a_server() {
+        assert!(Args::parse(&words(&["--headless"])).is_err());
+        assert!(Args::parse(&words(&["--screenshot", "out.png"])).is_err());
+        assert!(Args::parse(&words(&["--headless", "127.0.0.1", "25565"])).is_ok());
+    }
+
+    #[test]
+    fn a_lone_host_is_rejected() {
+        assert!(Args::parse(&words(&["localhost"])).is_err());
+    }
+
+    #[test]
+    fn parses_windowed_defaults() {
+        let args = Args::parse(&words(&["localhost", "25565"])).expect("valid args");
+        assert_eq!(args.host.as_deref(), Some("localhost"));
+        assert_eq!(args.port, Some(25565));
+        assert_eq!(args.name, "cindral");
+        assert_eq!(args.view_distance, 8);
+        assert!(args.screenshot.is_none());
+        assert!(!args.headless);
+        assert!(!args.ui_demo);
+        assert!(!args.block_demo);
+        assert_eq!(args.play, Duration::from_secs(60));
+        assert_eq!(args.script, "default");
+        assert_eq!(args.width, 1280);
+        assert_eq!(args.height, 720);
+        assert_eq!(args.mode(), Mode::Windowed);
+        assert_eq!(args.server(), Some(("localhost", 25565)));
+    }
+
+    #[test]
+    fn parses_screenshot_options() {
+        let args = Args::parse(&words(&[
+            "127.0.0.1",
+            "25599",
+            "--name",
+            "Pixel",
+            "--view-distance",
+            "12",
+            "--screenshot",
+            "/tmp/cindral.png",
+            "--collect-secs",
+            "3.5",
+            "--width",
+            "1920",
+            "--height",
+            "1080",
+        ]))
+        .expect("valid args");
+        assert_eq!(args.name, "Pixel");
+        assert_eq!(args.view_distance, 12);
+        assert_eq!(
+            args.screenshot.as_deref(),
+            Some(std::path::Path::new("/tmp/cindral.png"))
+        );
+        assert_eq!(args.collect, Duration::from_millis(3500));
+        assert_eq!((args.width, args.height), (1920, 1080));
+    }
+
+    #[test]
+    fn parses_the_headless_options() {
+        let args = Args::parse(&words(&[
+            "127.0.0.1",
+            "25599",
+            "--headless",
+            "--play-secs",
+            "90",
+            "--script",
+            "idle",
+        ]))
+        .expect("valid args");
+        assert!(args.headless);
+        assert_eq!(args.play, Duration::from_secs(90));
+        assert_eq!(args.script, "idle");
+        assert_eq!(args.mode(), Mode::Headless);
+    }
+
+    #[test]
+    fn parses_ui_demo_without_a_server() {
+        let args = Args::parse(&words(&["--ui-demo"])).expect("the ui demo needs no server");
+        assert!(args.ui_demo);
+        assert_eq!(args.host, None);
+        assert_eq!(args.port, None);
+        assert_eq!(args.server(), None);
+        assert_eq!(args.mode(), Mode::UiDemo);
+        assert_eq!((args.width, args.height), (1280, 720));
+    }
+
+    #[test]
+    fn parses_the_hud_demo_without_a_server_and_with_a_view() {
+        let args = Args::parse(&words(&["--hud-demo"])).expect("the hud demo needs no server");
+        assert!(args.hud_demo);
+        assert_eq!(args.hud_view, "overview");
+        assert_eq!(args.server(), None);
+        assert_eq!(args.mode(), Mode::HudDemo);
+
+        let args = Args::parse(&words(&[
+            "--hud-demo",
+            "--hud-view",
+            "controls",
+            "--screenshot",
+            "/tmp/m10-controls.png",
+        ]))
+        .expect("a hud demo with a view and a screenshot");
+        assert_eq!(args.hud_view, "controls");
+        assert_eq!(args.mode(), Mode::HudDemo);
+        assert!(args.screenshot.is_some());
+    }
+
+    #[test]
+    fn the_synthetic_panorama_flag_is_off_by_default() {
+        let on = Args::parse(&words(&["--hud-demo", "--synthetic-panorama"])).expect("flag");
+        assert!(on.synthetic_panorama);
+        let off = Args::parse(&words(&["--hud-demo"])).expect("no flag");
+        assert!(!off.synthetic_panorama);
+    }
+
+    #[test]
+    fn the_hud_demo_rejects_an_unknown_view_and_every_listed_view_parses() {
+        assert!(Args::parse(&words(&["--hud-demo", "--hud-view", "nope"])).is_err());
+        assert!(Args::parse(&words(&["--hud-demo", "--hud-view"])).is_err());
+        for view in HUD_VIEWS {
+            let args = Args::parse(&words(&["--hud-demo", "--hud-view", view])).expect(view);
+            assert_eq!(args.hud_view, view);
+        }
+    }
+
+    #[test]
+    fn the_ui_demo_wins_over_the_hud_demo_which_wins_over_the_block_demo() {
+        let ui = Args::parse(&words(&["--hud-demo", "--ui-demo"])).expect("both");
+        assert_eq!(ui.mode(), Mode::UiDemo);
+        let hud = Args::parse(&words(&["--block-demo", "--hud-demo"])).expect("both");
+        assert_eq!(hud.mode(), Mode::HudDemo);
+    }
+
+    #[test]
+    fn parses_ui_demo_with_a_screenshot() {
+        let args = Args::parse(&words(&[
+            "--ui-demo",
+            "--screenshot",
+            "/tmp/m4-ui.png",
+            "--width",
+            "800",
+            "--height",
+            "600",
+        ]))
+        .expect("the ui demo screenshot needs no server");
+        assert_eq!(args.mode(), Mode::UiDemo);
+        assert_eq!(
+            args.screenshot.as_deref(),
+            Some(std::path::Path::new("/tmp/m4-ui.png"))
+        );
+        assert_eq!((args.width, args.height), (800, 600));
+        assert_eq!(args.server(), None);
+    }
+
+    #[test]
+    fn parses_the_serverless_block_demo() {
+        let args = Args::parse(&words(&[
+            "--block-demo",
+            "--screenshot",
+            "/tmp/m5-blocks.png",
+        ]))
+        .expect("the block demo needs no server");
+        assert!(args.block_demo);
+        assert!(!args.ui_demo);
+        assert_eq!(args.host, None);
+        assert_eq!(args.port, None);
+        assert_eq!(args.server(), None);
+        assert_eq!(args.mode(), Mode::BlockDemo);
+        assert_eq!(
+            args.screenshot.as_deref(),
+            Some(std::path::Path::new("/tmp/m5-blocks.png"))
+        );
+    }
+
+    #[test]
+    fn the_demo_precedence_is_ui_then_blocks_then_headless() {
+        let ui = Args::parse(&words(&["--ui-demo", "--block-demo", "--headless"]))
+            .expect("both demos parse together");
+        assert_eq!(ui.mode(), Mode::UiDemo);
+
+        let blocks = Args::parse(&words(&["--block-demo", "--headless", "--screenshot", "x"]))
+            .expect("the block demo accepts the other mode flags");
+        assert_eq!(blocks.mode(), Mode::BlockDemo);
+    }
+
+    #[test]
+    fn ui_demo_wins_over_the_other_serverless_modes() {
+        let args = Args::parse(&words(&[
+            "--ui-demo",
+            "--headless",
+            "--screenshot",
+            "/tmp/out.png",
+        ]))
+        .expect("ui demo accepts the other mode flags");
+        assert_eq!(args.mode(), Mode::UiDemo);
+
+        let headless = Args::parse(&words(&[
+            "host",
+            "25565",
+            "--headless",
+            "--screenshot",
+            "x",
+        ]))
+        .expect("headless still parses");
+        assert_eq!(headless.mode(), Mode::Headless);
+    }
+
+    #[test]
+    fn the_serverless_modes_still_require_a_server() {
+        for case in [
+            vec!["--headless"],
+            vec!["--screenshot", "/tmp/out.png"],
+            vec!["host"],
+        ] {
+            assert!(
+                Args::parse(&words(&case)).is_err(),
+                "the normal modes must reject {case:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_bad_values() {
+        assert!(Args::parse(&words(&["host", "0"])).is_err());
+        assert!(Args::parse(&words(&["host", "70000"])).is_err());
+        assert!(Args::parse(&words(&["host", "25565", "--view-distance", "1"])).is_err());
+        assert!(Args::parse(&words(&["host", "25565", "--width", "0"])).is_err());
+        assert!(Args::parse(&words(&["host", "25565", "--unknown"])).is_err());
+        assert!(Args::parse(&words(&["host", "25565", "--name"])).is_err());
+        assert!(Args::parse(&words(&["host", "25565", "--handshake-host"])).is_err());
+        assert!(Args::parse(&words(&["host", "25565", "--play-secs", "0"])).is_err());
+        assert!(Args::parse(&words(&["host", "25565", "--script", "dance"])).is_err());
+        assert!(Args::parse(&words(&["--ui-demo", "--width", "0"])).is_err());
+        assert!(Args::parse(&words(&["--block-demo", "--width", "0"])).is_err());
+        // New M6 arguments
+        assert!(Args::parse(&words(&["--block-demo", "--time", "not-a-number"])).is_err());
+        assert!(Args::parse(&words(&["--block-demo", "--demo-view", "unknown"])).is_err());
+    }
+
+    #[test]
+    fn parses_block_demo_with_time_and_view() {
+        let args = Args::parse(&words(&[
+            "--block-demo",
+            "--time",
+            "-6000",
+            "--demo-view",
+            "cave",
+            "--screenshot",
+            "/tmp/m6-cave.png",
+        ]))
+        .expect("block demo with time and view");
+        assert!(args.block_demo);
+        assert_eq!(args.time, -6000);
+        assert_eq!(args.demo_view, DemoView::Cave);
+        assert_eq!(args.mode(), Mode::BlockDemo);
+    }
+
+    #[test]
+    fn demo_view_defaults_to_overview() {
+        let args = Args::parse(&words(&["--block-demo"])).expect("block demo");
+        assert_eq!(args.demo_view, DemoView::Overview);
+        assert_eq!(args.time, 6000);
+    }
+
+    #[test]
+    fn setup_assets_sets_expected_mode() {
+        let args = Args::parse(&words(&["--setup-assets"])).expect("setup assets parses");
+        assert!(args.setup_assets);
+        assert_eq!(args.mode(), Mode::SetupAssets);
+    }
+
+    #[test]
+    fn no_audio_is_a_flag_that_keeps_the_windowed_mode() {
+        let args = Args::parse(&words(&["--no-audio"])).expect("title screen with no audio");
+        assert!(args.no_audio);
+        assert_eq!(args.mode(), Mode::Windowed);
+        assert!(!Args::parse(&words(&[])).expect("defaults").no_audio);
+    }
+
+    #[test]
+    fn audio_probe_needs_no_server_and_picks_its_mode() {
+        let args = Args::parse(&words(&["--audio-probe"])).expect("audio probe parses");
+        assert!(args.audio_probe);
+        assert_eq!(args.mode(), Mode::AudioProbe);
+    }
+
+    #[test]
+    fn resource_pack_accumulates_in_order() {
+        let args = Args::parse(&words(&[
+            "--block-demo",
+            "--resource-pack",
+            "pack_a.zip",
+            "--resource-pack",
+            "pack_b",
+        ]))
+        .expect("block demo with resource packs parses");
+        assert_eq!(args.resource_packs.len(), 2);
+        assert_eq!(
+            args.resource_packs[0],
+            std::path::PathBuf::from("pack_a.zip")
+        );
+        assert_eq!(args.resource_packs[1], std::path::PathBuf::from("pack_b"));
+    }
+
+    #[test]
+    fn entity_demo_parses_without_server() {
+        let args = Args::parse(&words(&["--entity-demo"])).expect("entity demo parses");
+        assert!(args.entity_demo);
+        assert_eq!(args.mode(), Mode::EntityDemo);
+    }
+
+    #[test]
+    fn entity_demo_with_screenshot_sets_expected_mode() {
+        let args = Args::parse(&words(&["--entity-demo", "--screenshot", "/tmp/m8.png"]))
+            .expect("entity demo with screenshot");
+        assert!(args.entity_demo);
+        assert_eq!(
+            args.screenshot,
+            Some(std::path::PathBuf::from("/tmp/m8.png"))
+        );
+        assert_eq!(args.mode(), Mode::EntityDemo);
+    }
+
+    #[test]
+    fn mob_flag_parses_without_server_and_activates_entity_demo() {
+        let args = Args::parse(&words(&["--mob", "creeper", "--screenshot", "creeper.png"]))
+            .expect("mob flag parses");
+        assert_eq!(args.mob.as_deref(), Some("creeper"));
+        assert_eq!(
+            args.screenshot,
+            Some(std::path::PathBuf::from("creeper.png"))
+        );
+        assert_eq!(args.mode(), Mode::EntityDemo);
+    }
+
+    #[test]
+    fn dump_mobs_flag_parses_without_server() {
+        let args = Args::parse(&words(&["--dump-mobs", "target/mobs"])).expect("dump-mobs parses");
+        assert_eq!(
+            args.dump_mobs,
+            Some(std::path::PathBuf::from("target/mobs"))
+        );
+        assert_eq!(args.mode(), Mode::EntityDemo);
+    }
+
+    #[test]
+    fn parses_the_serverless_bench_scene() {
+        let args = Args::parse(&words(&[
+            "--bench-scene",
+            "--bench-origin",
+            "-1000000",
+            "--bench-frames",
+            "120",
+        ]))
+        .expect("the bench scene needs no server");
+        assert_eq!(args.mode(), Mode::BenchScene);
+        assert_eq!((args.bench_origin, args.bench_frames), (-1_000_000, 120));
+        assert_eq!(
+            Args::parse(&words(&["--bench-scene"]))
+                .expect("defaults")
+                .bench_frames,
+            600
+        );
+        assert!(Args::parse(&words(&["--bench-scene", "--bench-frames", "0"])).is_err());
+        assert!(Args::parse(&words(&["--bench-scene", "--bench-origin", "30000000"])).is_err());
+    }
+}

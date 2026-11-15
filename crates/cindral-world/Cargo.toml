@@ -1,0 +1,23 @@
+[package]
+name = "cindral-world"
+description = "Cindral world model: 1.8 chunk columns, compact paletted section storage, and block updates."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion = "0.8"
+# The payload-layout test checks the world's formula against the protocol's.
+cindral-protocol.workspace = true
+
+[[bench]]
+name = "world"
+harness = false
+
+[lints]
+workspace = true

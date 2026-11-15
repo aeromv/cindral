@@ -1,0 +1,88 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Cindral renderer: wgpu window/offscreen targets, terrain pipeline, a
+//! block texture array, a free camera, a debug overlay, and the immediate-mode
+//! UI pass.
+//!
+//! The renderer deliberately owns no Mojang assets: the block array starts as
+//! procedurally generated textures and [`Renderer::set_block_atlas`] accepts
+//! pixels decoded at runtime from the user's installation, which are never
+//! bundled with this crate. The overlay font is built in. Meshes are produced
+//! by `cindral-mesh` and uploaded per chunk column. The UI layer lives in the
+//! pure `cindral-ui` crate; this crate only uploads its [`ui_pass::UiPass`]
+//! vertices and font atlas.
+
+mod adapter;
+mod batch_buffer;
+mod block_atlas;
+mod border;
+mod camera;
+mod capture;
+mod cave_graph;
+mod chunk_pass;
+mod clouds;
+mod dynamic_blocks;
+pub mod entity_pass;
+mod environment;
+mod error;
+mod fog;
+mod font;
+mod gpu_timer;
+mod hires_blocks;
+pub mod hud;
+pub mod hud_hearts;
+mod items;
+mod lightmap;
+mod mipmap;
+mod motion_blur;
+mod nametag;
+mod outline;
+mod overlay;
+mod overlays;
+mod panorama;
+mod particles;
+mod render_scale;
+mod renderer;
+mod scene_blur;
+mod sky;
+mod texture;
+mod ui_pass;
+mod weather;
+
+pub use adapter::{AdapterKind, AdapterSummary};
+pub use block_atlas::BlockAtlasError;
+pub use border::{BorderStatus, BorderView};
+pub use camera::{Camera, Frustum};
+pub use cindral_ui::screens::gui_scale;
+pub use cindral_ui::SpriteSheet;
+pub use clouds::CloudMode;
+pub use entity_pass::{EntityBatch, EntityRenderer, EntityTexture, EntityVertex};
+pub use environment::RenderEnvironment;
+pub use error::RenderError;
+pub use fog::{light_brightness, FogContext, FogMedium, FogMode, FogParams};
+pub use gpu_timer::{GpuTimings, GROUP_NAMES};
+pub use hud::{
+    chat_input_hit, chat_run_at, draw_hud_gui, measure_mod_widget, HudSheets, InputHit, LineIcon,
+    ModCell, ModLine, ModWidgetView, ShadowStyle, WidgetStyle,
+};
+pub use hud::{
+    plain_text, ActionBarView, BossView, ChatInputView, ChatLineView, ChatRunView, ChatStyle,
+    CombatFacts, DebugF3View, HudState, ModFacts, SidebarLineView, SidebarView, TabEntryView,
+    TabListView, TabValueStyle, TitleView,
+};
+pub use hud_hearts::{HeartsTint, HeartsView};
+pub use items::{
+    IconProvider, NoIcons, ICON_ATLAS_SIZE, ICON_CELL_SIZE, PORTRAIT_KEY, PORTRAIT_SIZE,
+};
+pub use motion_blur::{MotionBlurSettings, MotionBlurVersion};
+pub use nametag::Nametag;
+pub use outline::{edge_vertices, OutlineBox, OUTLINE_GROWTH};
+pub use overlay::{Overlay, OverlayVertex};
+pub use overlays::{Portal, ScreenOverlays, Underwater};
+pub use particles::{ParticleSprite, MAX_SPRITES};
+pub use render_scale::MIN_RENDER_SCALE;
+pub use renderer::{default_backends, Image, Renderer};
+pub use sky::{SkyImage, SkyState, SkyTextures};
+pub use texture::{fallback_texture_data, LAYER_BYTES, TEXTURE_SIZE};
+pub use ui_pass::{fallback_atlas, FontAtlasError, UiBatch, UiBatchKind, UiPass};
+pub use weather::{PrecipitationCell, PrecipitationField, FIELD_RADIUS};

@@ -1,0 +1,30 @@
+[package]
+name = "cindral-game"
+description = "Cindral game logic: 1.8 movement rules, block collision, prediction and reconciliation, tick and ray cast."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+glam = "0.34"
+serde_json.workspace = true
+thiserror.workspace = true
+cindral-core.workspace = true
+cindral-protocol.workspace = true
+cindral-world.workspace = true
+
+[features]
+# Forwards to `cindral-core/profiling`: puffin CPU spans.
+profiling = ["cindral-core/profiling"]
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+criterion = "0.8"
+
+[[bench]]
+name = "particles"
+harness = false

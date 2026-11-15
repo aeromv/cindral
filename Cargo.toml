@@ -1,0 +1,76 @@
+[workspace]
+exclude = ["fuzz"]
+resolver = "2"
+members = [
+    "crates/cindral-core",
+    "crates/cindral-protocol",
+    "crates/cindral-world",
+    "crates/cindral-model",
+    "crates/cindral-mesh",
+    "crates/cindral-render",
+    "crates/cindral-client",
+    "crates/cindral-net",
+    "crates/cindral-testkit",
+    "crates/cindral-assets",
+    "crates/cindral-game",
+    "crates/cindral-ui",
+    "crates/cindral-audio",
+    "crates/cindral-auth",
+    "crates/cindral-builtin-mods",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Cindral contributors", "Umicraft contributors"]
+repository = "https://github.com/aeromv/cindral"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+aes = "0.9"
+bytemuck = { version = "1", features = ["derive"] }
+flate2 = "1.0"
+fontdue = "0.9"
+jpeg-decoder = { version = "0.3", default-features = false }
+num-bigint = "0.5"
+png = "0.18"
+proptest = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "system-proxy"] }
+rsa = "0.9"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha1 = "0.11"
+thiserror = "2.0"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "time", "macros", "sync", "signal"] }
+toml = "1.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "std", "tracing-log"] }
+cindral-assets = { path = "crates/cindral-assets", version = "0.1.0" }
+cindral-core = { path = "crates/cindral-core", version = "0.1.0" }
+cindral-model = { path = "crates/cindral-model", version = "0.1.0" }
+cindral-net = { path = "crates/cindral-net", version = "0.1.0" }
+cindral-protocol = { path = "crates/cindral-protocol", version = "0.1.0" }
+cindral-world = { path = "crates/cindral-world", version = "0.1.0" }
+cindral-mesh = { path = "crates/cindral-mesh", version = "0.1.0" }
+cindral-render = { path = "crates/cindral-render", version = "0.1.0" }
+cindral-game = { path = "crates/cindral-game", version = "0.1.0" }
+cindral-ui = { path = "crates/cindral-ui", version = "0.1.0" }
+cindral-audio = { path = "crates/cindral-audio", version = "0.1.0" }
+cindral-auth = { path = "crates/cindral-auth", version = "0.1.0" }
+cindral-builtin-mods = { path = "crates/cindral-builtin-mods", version = "0.1.0" }
+
+[workspace.lints.rust]
+missing_docs = "deny"
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+chunks_exact_to_as_chunks = "allow"
+
+# The build to hand out: `cargo build --profile dist`. Fat LTO with one codegen unit
+# makes the CPU-bound scene about 6 to 8 % faster and
+# takes about 4 minutes cold, so day-to-day builds keep the plain `release` profile.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1

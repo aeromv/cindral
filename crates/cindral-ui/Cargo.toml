@@ -1,0 +1,17 @@
+[package]
+name = "cindral-ui"
+description = "Cindral immediate-mode UI: layout, focus, widgets, font atlas, and a backend-agnostic draw list."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+fontdue.workspace = true
+png.workspace = true
+thiserror.workspace = true
+cindral-core.workspace = true
+
+[lints]
+workspace = true

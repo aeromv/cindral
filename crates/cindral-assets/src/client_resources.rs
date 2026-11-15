@@ -1,0 +1,1303 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Bulk read of the blockstate, model and texture files of a verified client
+//! jar.
+//!
+//! The jar is read once into a virtual resource map; the model parser and the
+//! atlas builder then work purely in memory. This avoids re-reading and
+//! re-inflating the 8 MB jar for every one of the ~2,000 entries.
+//!
+//! The map keeps the complete virtual path (`assets/minecraft/...`) because
+//! that is what [`ResourceSource`] expects. The atlas uses the shorter texture
+//! key relative to `textures/` (`blocks/stone`, `items/apple`) because that is
+//! what the baked block models reference.
+//!
+//! Every atlas layer is normalised to the largest frame edge found in the jar.
+//! In 1.8.8 that is 32 pixels because the flowing water and lava strips have
+//! 32×32 frames, so all 16×16 textures are upscaled with nearest-neighbour
+//! sampling rather than cropping the larger animation frames.
+
+use std::collections::BTreeMap;
+
+use cindral_model::{AtlasLayout, ModelError, ModelResult, ResourceSource};
+
+use crate::animation::{AnimationMeta, TextureAnimation};
+use crate::atlas::{BlockAtlas, HiresLayer};
+use crate::client_jar::ClientJar;
+use crate::colormap::{BiomeColormaps, Colormap, COLORMAP_PREFIX, FOLIAGE_PATH, GRASS_PATH};
+use crate::dial::{DialKind, DialSprite};
+use crate::error::image_error;
+use crate::gui_atlas::{pack_gui_atlas, GuiAtlas, GuiImage};
+use crate::AssetsResult;
+
+/// Prefix of the 1.8 blockstate documents inside the client jar.
+const BLOCKSTATES_PREFIX: &str = "assets/minecraft/blockstates/";
+/// Prefix of the 1.8 block and item model documents inside the client jar.
+const MODELS_PREFIX: &str = "assets/minecraft/models/";
+/// Prefix of the 1.8 block textures inside the client jar.
+const BLOCK_TEXTURES_PREFIX: &str = "assets/minecraft/textures/blocks/";
+/// Prefix of the 1.8 item textures inside the client jar.
+const ITEM_TEXTURES_PREFIX: &str = "assets/minecraft/textures/items/";
+/// Prefix of the 1.8 GUI textures (backgrounds, widgets, icons).
+const GUI_TEXTURES_PREFIX: &str = "assets/minecraft/textures/gui/";
+/// The block textures the achievement screen tiles its map with
+/// (`GuiAchievements`); they join the GUI atlas as `blocks/<name>`.
+pub const ACHIEVEMENT_TILES: [&str; 8] = [
+    "sand",
+    "diamond_ore",
+    "redstone_ore",
+    "iron_ore",
+    "coal_ore",
+    "stone",
+    "dirt",
+    "bedrock",
+];
+/// The enchantment glint texture, drawn additively over enchanted items.
+const GLINT_PATH: &str = "assets/minecraft/textures/misc/enchanted_item_glint.png";
+/// Prefix shared by every texture key.
+const TEXTURES_ROOT: &str = "assets/minecraft/textures/";
+
+/// The largest edge of an atlas layer (see `atlas_frame_edge`).
+const MAX_ATLAS_EDGE: u32 = 256;
+/// The largest edge of a layer of the second array of large textures.
+const MAX_HIRES_EDGE: u32 = 1024;
+/// How much memory the second array may take with its mips is about a third
+/// more than this: the textures beyond it stay at the size of the main array.
+const HIRES_BUDGET_BYTES: usize = 128 * 1024 * 1024;
+
+/// Edge length of an atlas with no textures at all.
+///
+/// A normal source derives the edge from its largest frame (32 for 1.8.8).
+const DEFAULT_FRAME_SIZE: u32 = 16;
+
+/// One decoded PNG before it is cropped and copied into the atlas.
+#[derive(Debug)]
+pub(crate) struct DecodedPng {
+    /// Pixel width of the full image.
+    pub(crate) width: u32,
+    /// Pixel height of the full image (larger than `width` for animation strips).
+    pub(crate) height: u32,
+    /// Tightly packed RGBA8 pixels of the full image.
+    pub(crate) pixels: Vec<u8>,
+}
+
+impl DecodedPng {
+    /// Decodes `bytes` to RGBA8, expanding palette, grayscale and 16-bit PNGs.
+    pub(crate) fn decode(path: &str, bytes: &[u8]) -> AssetsResult<Self> {
+        let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+        // EXPAND turns palette and low-bit-depth images into 8-bit samples;
+        // STRIP_16 narrows 16-bit samples; ALPHA adds an opaque alpha channel
+        // when the PNG has none. Together they guarantee RGBA or gray+alpha.
+        decoder.set_transformations(
+            png::Transformations::EXPAND
+                | png::Transformations::STRIP_16
+                | png::Transformations::ALPHA,
+        );
+        let mut reader = decoder
+            .read_info()
+            .map_err(|error| image_error(path, format!("invalid PNG header: {error}")))?;
+        let mut buffer = vec![0_u8; reader.output_buffer_size().unwrap_or(0)];
+        let info = reader
+            .next_frame(&mut buffer)
+            .map_err(|error| image_error(path, format!("invalid PNG data: {error}")))?;
+
+        if info.width == 0 || info.height == 0 {
+            return Err(image_error(path, "the image has a zero dimension"));
+        }
+        if info.bit_depth != png::BitDepth::Eight {
+            return Err(image_error(
+                path,
+                format!("unsupported bit depth {:?}", info.bit_depth),
+            ));
+        }
+
+        let data = buffer
+            .get(..info.buffer_size())
+            .ok_or_else(|| image_error(path, "the decoder returned a short buffer"))?;
+        let pixels = match info.color_type {
+            png::ColorType::Rgba => data.to_vec(),
+            png::ColorType::GrayscaleAlpha => gray_alpha_to_rgba(data),
+            png::ColorType::Rgb => rgb_to_rgba(data),
+            png::ColorType::Grayscale => gray_to_rgba(data),
+            png::ColorType::Indexed => {
+                return Err(image_error(path, "the indexed image was not expanded"))
+            }
+        };
+        let expected = pixel_bytes(info.width, info.height)
+            .ok_or_else(|| image_error(path, "the image size overflows"))?;
+        if pixels.len() != expected {
+            return Err(image_error(
+                path,
+                format!(
+                    "the decoder returned {} bytes for a {}x{} RGBA image",
+                    pixels.len(),
+                    info.width,
+                    info.height
+                ),
+            ));
+        }
+        Ok(Self {
+            width: info.width,
+            height: info.height,
+            pixels,
+        })
+    }
+
+    /// The edge of one square frame in this image.
+    ///
+    /// A square PNG is a single frame. A tall PNG is an animation strip made of
+    /// vertically stacked square frames, so its height must be an exact
+    /// multiple of its width. Anything else is not a 1.8 texture and is
+    /// rejected instead of being silently misread.
+    fn frame_edge(&self, path: &str) -> AssetsResult<u32> {
+        if self.width == self.height
+            || (self.height > self.width && self.height.is_multiple_of(self.width))
+        {
+            return Ok(self.width);
+        }
+        Err(image_error(
+            path,
+            format!(
+                "expected a square image or a vertical animation strip, got {}x{}",
+                self.width, self.height
+            ),
+        ))
+    }
+
+    /// How many square frames the image holds (1 unless it is an animation strip).
+    fn frame_count(&self, path: &str) -> AssetsResult<u32> {
+        Ok(self.height / self.frame_edge(path)?)
+    }
+
+    /// Returns frame number `index` scaled to `edge`×`edge` with
+    /// nearest-neighbour sampling.
+    ///
+    /// A square image has the single frame 0. An animation strip stacks
+    /// `width`×`width` frames, so a 16×512 strip yields 32 frames of 16×16 and a
+    /// 32×1024 strip yields 32 full 32×32 frames. The frame is then replicated
+    /// or sampled to the atlas edge; integer scale factors preserve every
+    /// source pixel and its alpha exactly.
+    fn frame_at(&self, index: u32, edge: u32, path: &str) -> AssetsResult<Vec<u8>> {
+        let frame_edge = self.frame_edge(path)?;
+        let source_edge = usize::try_from(frame_edge)
+            .map_err(|_| image_error(path, "the frame size does not fit into memory"))?;
+        let atlas_edge = usize::try_from(edge)
+            .map_err(|_| image_error(path, "the atlas size does not fit into memory"))?;
+        if atlas_edge == 0 {
+            return Err(image_error(path, "the atlas frame is empty"));
+        }
+
+        let source_stride = pixel_bytes(self.width, 1)
+            .ok_or_else(|| image_error(path, "the image width overflows"))?;
+        let frame_row_bytes = pixel_bytes(frame_edge, 1)
+            .ok_or_else(|| image_error(path, "the frame width overflows"))?;
+        let frame_len = pixel_bytes(frame_edge, frame_edge)
+            .ok_or_else(|| image_error(path, "the frame size overflows"))?;
+        let mut frame = Vec::with_capacity(frame_len);
+        let first_row = index
+            .checked_mul(frame_edge)
+            .ok_or_else(|| image_error(path, "the frame row overflows"))?;
+        for row in first_row..first_row.saturating_add(frame_edge) {
+            let start = source_stride
+                .checked_mul(
+                    usize::try_from(row)
+                        .map_err(|_| image_error(path, "the frame row overflows"))?,
+                )
+                .ok_or_else(|| image_error(path, "the frame offset overflows"))?;
+            let end = start
+                .checked_add(frame_row_bytes)
+                .ok_or_else(|| image_error(path, "the frame offset overflows"))?;
+            let row = self
+                .pixels
+                .get(start..end)
+                .ok_or_else(|| image_error(path, "the animation frame is truncated"))?;
+            frame.extend_from_slice(row);
+        }
+
+        if frame_edge == edge {
+            return Ok(frame);
+        }
+
+        if source_edge > atlas_edge {
+            // Shrinking: average the source pixels each new one covers, so a
+            // 512 pixel item keeps its detail instead of losing three pixels
+            // in four to nearest-neighbour sampling.
+            return Ok(box_average(&frame, source_edge, atlas_edge));
+        }
+
+        let scaled_len = pixel_bytes(edge, edge)
+            .ok_or_else(|| image_error(path, "the scaled frame size overflows"))?;
+        let mut scaled = Vec::with_capacity(scaled_len);
+        for y in 0..atlas_edge {
+            let source_y = y
+                .checked_mul(source_edge)
+                .ok_or_else(|| image_error(path, "the source row overflows"))?
+                / atlas_edge;
+            for x in 0..atlas_edge {
+                let source_x = x
+                    .checked_mul(source_edge)
+                    .ok_or_else(|| image_error(path, "the source column overflows"))?
+                    / atlas_edge;
+                let index = (source_y * source_edge + source_x) * 4;
+                let pixel = frame
+                    .get(index..index + 4)
+                    .ok_or_else(|| image_error(path, "the scaled frame is truncated"))?;
+                scaled.extend_from_slice(pixel);
+            }
+        }
+        Ok(scaled)
+    }
+}
+
+/// A square RGBA frame of `source` pixels shrunk to `target` (< `source`) by
+/// averaging the pixels each target pixel covers. Colours are weighted by
+/// alpha so a transparent texel does not darken its neighbours.
+fn box_average(frame: &[u8], source: usize, target: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(target * target * 4);
+    for y in 0..target {
+        let (y0, y1) = (
+            y * source / target,
+            ((y + 1) * source / target).max(y * source / target + 1),
+        );
+        for x in 0..target {
+            let (x0, x1) = (
+                x * source / target,
+                ((x + 1) * source / target).max(x * source / target + 1),
+            );
+            let (mut color, mut alpha, mut count) = ([0_u64; 3], 0_u64, 0_u64);
+            for sy in y0..y1.min(source) {
+                for sx in x0..x1.min(source) {
+                    let at = (sy * source + sx) * 4;
+                    let a = u64::from(frame[at + 3]);
+                    for (channel, total) in color.iter_mut().enumerate() {
+                        *total += u64::from(frame[at + channel]) * a;
+                    }
+                    alpha += a;
+                    count += 1;
+                }
+            }
+            let count = count.max(1);
+            if alpha == 0 {
+                out.extend_from_slice(&[0, 0, 0, 0]);
+            } else {
+                out.extend(color.map(|total| (total / alpha) as u8));
+                out.push((alpha / count) as u8);
+            }
+        }
+    }
+    out
+}
+
+/// One texture key and its decoded pixels, in jar path order.
+#[derive(Debug)]
+struct TextureLayer {
+    /// Texture key relative to `textures/`, e.g. `blocks/stone`.
+    key: String,
+    /// Virtual jar path, used in error messages.
+    path: String,
+    /// Decoded full image.
+    image: DecodedPng,
+}
+
+/// The decoded enchantment glint texture.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlintTexture {
+    /// Pixel width.
+    pub width: u32,
+    /// Pixel height.
+    pub height: u32,
+    /// Tightly packed RGBA8 pixels, `width * height * 4` bytes.
+    pub pixels: Vec<u8>,
+}
+
+/// Every blockstate, block model and block/item texture of one client jar,
+/// plus the optional biome colormaps and the GUI texture atlas.
+#[derive(Debug, Clone)]
+pub struct ClientResources {
+    files: BTreeMap<String, Vec<u8>>,
+    raw_colormaps: BTreeMap<String, Vec<u8>>,
+    raw_gui: BTreeMap<String, Vec<u8>>,
+    raw_glint: Option<Vec<u8>>,
+    atlas: BlockAtlas,
+    colormaps: Option<BiomeColormaps>,
+    gui_atlas: GuiAtlas,
+    glint: Option<GlintTexture>,
+}
+
+impl ClientResources {
+    /// Reads the M5 subset of `jar` and builds its texture array.
+    ///
+    /// The bulk read opens and reads the archive exactly once. The resulting
+    /// map contains every blockstate and block model JSON, every block and item
+    /// PNG, and the `.mcmeta` animation metadata (the metadata is exposed as a
+    /// resource but does not add an atlas layer). Entries outside those
+    /// prefixes or extensions are ignored.
+    ///
+    /// The two 256×256 biome colormaps (`colormap/grass.png`,
+    /// `colormap/foliage.png`) are decoded into [`Self::colormaps`] and are
+    /// **not** added to the block atlas: the renderer multiplies them in the
+    /// shader, it never samples them as a texture layer.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::AssetsError::Io`] or [`crate::AssetsError::Zip`] when the jar cannot be read,
+    /// and [`crate::AssetsError::Image`] when a texture or a present colormap is not a
+    /// decodable PNG, or when the colormap is not 256×256.
+    pub fn load(jar: &ClientJar) -> AssetsResult<Self> {
+        Self::load_with_packs(jar, &[])
+    }
+
+    /// Loads the resources of `jar` with `packs` layered over them, last pack
+    /// on top, building the atlas once.
+    ///
+    /// The same as [`Self::load`] then [`Self::apply_packs`], without
+    /// decoding every texture and packing the atlas a second time.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Self::load`] and [`Self::apply_packs`].
+    pub fn load_with_packs(
+        jar: &ClientJar,
+        packs: &[crate::resource_pack::ResourcePack],
+    ) -> AssetsResult<Self> {
+        let mut raw = RawResources::read(jar)?;
+        raw.overlay(packs);
+        Self::build_internal(raw.files, raw.colormaps, raw.gui, raw.glint)
+    }
+}
+
+/// The undecoded files of the client: those of the jar, then those of the
+/// packs layered over them.
+struct RawResources {
+    files: BTreeMap<String, Vec<u8>>,
+    colormaps: BTreeMap<String, Vec<u8>>,
+    gui: BTreeMap<String, Vec<u8>>,
+    glint: Option<Vec<u8>>,
+}
+
+impl RawResources {
+    /// Reads the files the client uses from `jar`.
+    fn read(jar: &ClientJar) -> AssetsResult<Self> {
+        let entries = jar.read_prefixes(&[
+            BLOCKSTATES_PREFIX,
+            MODELS_PREFIX,
+            BLOCK_TEXTURES_PREFIX,
+            ITEM_TEXTURES_PREFIX,
+            COLORMAP_PREFIX,
+            GUI_TEXTURES_PREFIX,
+            UNKNOWN_SERVER_PATH,
+            UNKNOWN_PACK_PATH,
+            DEFAULT_PACK_PATH,
+            GLINT_PATH,
+        ])?;
+
+        let mut raw = Self {
+            files: BTreeMap::new(),
+            colormaps: BTreeMap::new(),
+            gui: BTreeMap::new(),
+            glint: None,
+        };
+        for (path, bytes) in entries {
+            if path == GLINT_PATH {
+                raw.glint = Some(bytes);
+            } else if path == GRASS_PATH || path == FOLIAGE_PATH {
+                raw.colormaps.insert(path, bytes);
+            } else if is_gui_texture(&path) {
+                raw.gui.insert(path, bytes);
+            } else if is_json_resource(&path)
+                || is_texture_metadata(&path)
+                || texture_key(&path).is_some()
+            {
+                raw.files.insert(path, bytes);
+            }
+        }
+        Ok(raw)
+    }
+
+    /// Layers the files of `packs` over these, last pack on top.
+    fn overlay(&mut self, packs: &[crate::resource_pack::ResourcePack]) {
+        for pack in packs {
+            for (path, bytes) in pack.files() {
+                if path == GLINT_PATH {
+                    self.glint = Some(bytes.clone());
+                } else if path == GRASS_PATH || path == FOLIAGE_PATH {
+                    self.colormaps.insert(path.clone(), bytes.clone());
+                } else if is_gui_texture(path) {
+                    self.gui.insert(path.clone(), bytes.clone());
+                } else if texture_key(path).is_some() {
+                    // A texture of the wrong shape would fail the whole load:
+                    // keep the one underneath instead.
+                    if has_texture_shape(bytes) {
+                        self.files.insert(path.clone(), bytes.clone());
+                    } else {
+                        tracing::warn!(pack = pack.id(), path, "ignoring an invalid pack texture");
+                    }
+                } else if is_json_resource(path) || is_texture_metadata(path) {
+                    self.files.insert(path.clone(), bytes.clone());
+                }
+            }
+        }
+    }
+}
+
+impl ClientResources {
+    /// Builds a new [`ClientResources`] instance by layering resource packs
+    /// over this base instance.
+    ///
+    /// Files present in packs override matching files from this instance.
+    /// The atlas and colormaps are re-generated accordingly.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::AssetsError::Image`] if an overridden texture or colormap is invalid.
+    pub fn apply_packs(&self, packs: &[crate::resource_pack::ResourcePack]) -> AssetsResult<Self> {
+        let mut raw = RawResources {
+            files: self.files.clone(),
+            colormaps: self.raw_colormaps.clone(),
+            gui: self.raw_gui.clone(),
+            glint: self.raw_glint.clone(),
+        };
+        raw.overlay(packs);
+        Self::build_internal(raw.files, raw.colormaps, raw.gui, raw.glint)
+    }
+
+    /// Internal builder that constructs a complete [`ClientResources`].
+    fn build_internal(
+        files: BTreeMap<String, Vec<u8>>,
+        raw_colormaps: BTreeMap<String, Vec<u8>>,
+        raw_gui: BTreeMap<String, Vec<u8>>,
+        raw_glint: Option<Vec<u8>>,
+    ) -> AssetsResult<Self> {
+        let keyed: Vec<_> = files
+            .iter()
+            .filter_map(|(path, bytes)| Some((texture_key(path)?, path, bytes)))
+            .collect();
+        let images =
+            decode_in_parallel(&keyed, |(_, path, bytes)| DecodedPng::decode(path, bytes))?;
+        let textures: Vec<TextureLayer> = keyed
+            .into_iter()
+            .zip(images)
+            .map(|((key, path, _), image)| TextureLayer {
+                key,
+                path: path.clone(),
+                image,
+            })
+            .collect();
+
+        let mut decoded_colormaps = BTreeMap::new();
+        for (path, bytes) in &raw_colormaps {
+            decoded_colormaps.insert(path.clone(), DecodedPng::decode(path, bytes)?);
+        }
+
+        let mut gui_images = decode_gui_textures(&raw_gui)?;
+        gui_images.extend(decode_tile_textures(&files)?);
+        let atlas = build_atlas(textures, &files)?;
+        let colormaps = decode_colormaps(&mut decoded_colormaps)?;
+        let gui_atlas = pack_gui_atlas(gui_images);
+        let glint = raw_glint
+            .as_deref()
+            .map(|bytes| DecodedPng::decode(GLINT_PATH, bytes))
+            .transpose()?
+            .map(|png| GlintTexture {
+                width: png.width,
+                height: png.height,
+                pixels: png.pixels,
+            });
+        Ok(Self {
+            files,
+            raw_colormaps,
+            raw_gui,
+            raw_glint,
+            atlas,
+            colormaps,
+            gui_atlas,
+            glint,
+        })
+    }
+
+    /// Reads one virtual resource path.
+    #[must_use]
+    pub fn get(&self, path: &str) -> Option<&[u8]> {
+        self.files.get(path).map(Vec::as_slice)
+    }
+
+    /// Number of loaded files.
+    ///
+    /// This includes the texture `.mcmeta` entries, which are counted as
+    /// texture entries but are not atlas layers.
+    #[must_use]
+    pub fn file_count(&self) -> usize {
+        self.files.len()
+    }
+
+    /// The decoded texture array.
+    #[must_use]
+    pub fn atlas(&self) -> &BlockAtlas {
+        &self.atlas
+    }
+
+    /// The GUI texture atlas built from `textures/gui/` entries in the jar.
+    #[must_use]
+    pub fn gui_atlas(&self) -> &GuiAtlas {
+        &self.gui_atlas
+    }
+
+    /// The enchantment glint texture, when the jar or a pack provides it.
+    ///
+    /// `None` is not an error: enchanted items then simply draw without the
+    /// glint overlay.
+    #[must_use]
+    pub fn glint_texture(&self) -> Option<&GlintTexture> {
+        self.glint.as_ref()
+    }
+
+    /// The grass and foliage colormaps, when the jar contains both.
+    ///
+    /// `None` is not an error: the mesher then leaves every face untinted
+    /// (white), which keeps custom or synthetic installations renderable.
+    #[must_use]
+    pub fn colormaps(&self) -> Option<&BiomeColormaps> {
+        self.colormaps.as_ref()
+    }
+}
+
+impl GuiAtlas {
+    /// Builds a GUI atlas directly from the `textures/gui/` entries in `jar`.
+    ///
+    /// # Errors
+    /// [`AssetsError`] on archive read or PNG decode failure.
+    pub fn from_jar(jar: &ClientJar) -> AssetsResult<Self> {
+        let entries = jar.read_prefixes(&[
+            GUI_TEXTURES_PREFIX,
+            BLOCK_TEXTURES_PREFIX,
+            UNKNOWN_SERVER_PATH,
+            UNKNOWN_PACK_PATH,
+            DEFAULT_PACK_PATH,
+        ])?;
+        let mut raw_gui = BTreeMap::new();
+        let mut tiles = BTreeMap::new();
+        for (path, bytes) in entries {
+            if is_gui_texture(&path) {
+                raw_gui.insert(path, bytes);
+            } else if tile_name(&path).is_some() {
+                tiles.insert(path, bytes);
+            }
+        }
+        let mut gui_images = decode_gui_textures(&raw_gui)?;
+        gui_images.extend(decode_tile_textures(&tiles)?);
+        Ok(pack_gui_atlas(gui_images))
+    }
+}
+
+/// Builds the optional colormap pair from the decoded jar entries.
+///
+/// Both maps are required together: `BiomeTints` samples grass and foliage
+/// from the same climate table, and partial tinting would silently diverge
+/// from vanilla. A malformed map is an error; a missing one disables tinting.
+fn decode_colormaps(
+    decoded: &mut BTreeMap<String, DecodedPng>,
+) -> AssetsResult<Option<BiomeColormaps>> {
+    let (Some(grass), Some(foliage)) = (decoded.remove(GRASS_PATH), decoded.remove(FOLIAGE_PATH))
+    else {
+        return Ok(None);
+    };
+    let grass = Colormap::from_rgba8(GRASS_PATH, grass.width, grass.height, &grass.pixels)?;
+    let foliage =
+        Colormap::from_rgba8(FOLIAGE_PATH, foliage.width, foliage.height, &foliage.pixels)?;
+    Ok(Some(BiomeColormaps { grass, foliage }))
+}
+
+impl ResourceSource for ClientResources {
+    fn read(&self, path: &str) -> ModelResult<Vec<u8>> {
+        self.files
+            .get(path)
+            .cloned()
+            .ok_or_else(|| ModelError::Resource {
+                path: path.to_string(),
+                message: "the verified client jar does not contain this entry".to_string(),
+            })
+    }
+
+    fn list(&self, prefix: &str) -> Vec<String> {
+        self.files
+            .keys()
+            .filter(|path| path.starts_with(prefix))
+            .cloned()
+            .collect()
+    }
+}
+
+/// True for a blockstate or block-model JSON file.
+fn is_json_resource(path: &str) -> bool {
+    path.ends_with(".json")
+        && (path.starts_with(BLOCKSTATES_PREFIX) || path.starts_with(MODELS_PREFIX))
+}
+
+/// True for a texture animation metadata file.
+fn is_texture_metadata(path: &str) -> bool {
+    path.ends_with(".mcmeta")
+        && (path.starts_with(BLOCK_TEXTURES_PREFIX) || path.starts_with(ITEM_TEXTURES_PREFIX))
+}
+
+/// The atlas key of a block or item PNG, or `None` for any other path.
+fn texture_key(path: &str) -> Option<String> {
+    if !path.starts_with(BLOCK_TEXTURES_PREFIX) && !path.starts_with(ITEM_TEXTURES_PREFIX) {
+        return None;
+    }
+    let relative = path.strip_prefix(TEXTURES_ROOT)?.strip_suffix(".png")?;
+    if relative.is_empty() {
+        return None;
+    }
+    Some(relative.to_string())
+}
+
+/// The default server icon, which lives outside `textures/gui/` but is only
+/// drawn by the server list, so it joins the GUI atlas as `misc/unknown_server`.
+const UNKNOWN_SERVER_PATH: &str = "assets/minecraft/textures/misc/unknown_server.png";
+/// The icon of a resource pack that has no `pack.png`, drawn by the resource
+/// packs screen (`ResourcePackListEntryFound` binds `unknown_pack.png`).
+const UNKNOWN_PACK_PATH: &str = "assets/minecraft/textures/misc/unknown_pack.png";
+/// The `pack.png` at the root of the client jar: the icon of the built-in
+/// "Default" pack (`DefaultResourcePack.getPackImage`).
+const DEFAULT_PACK_PATH: &str = "pack.png";
+
+/// The textures outside `textures/gui/` that the GUI atlas holds anyway, with
+/// their region names.
+const EXTRA_GUI_TEXTURES: [(&str, &str); 3] = [
+    (UNKNOWN_SERVER_PATH, "misc/unknown_server"),
+    (UNKNOWN_PACK_PATH, "misc/unknown_pack"),
+    (DEFAULT_PACK_PATH, "misc/default_pack"),
+];
+
+/// True for a GUI texture PNG (container backgrounds, widgets, icons) or one
+/// of the [`EXTRA_GUI_TEXTURES`] (the default server and pack icons).
+fn is_gui_texture(path: &str) -> bool {
+    (path.starts_with(GUI_TEXTURES_PREFIX) && path.ends_with(".png"))
+        || EXTRA_GUI_TEXTURES.iter().any(|(extra, _)| *extra == path)
+}
+
+/// Whether `png` is a PNG whose size [`DecodedPng::frame_edge`] accepts: a
+/// square, or a vertical strip of squares. Reads only the `IHDR` header.
+fn has_texture_shape(png: &[u8]) -> bool {
+    const SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+    if png.len() < 24 || !png.starts_with(SIGNATURE) || &png[12..16] != b"IHDR" {
+        return false;
+    }
+    let side = |at: usize| u32::from_be_bytes([png[at], png[at + 1], png[at + 2], png[at + 3]]);
+    let (width, height) = (side(16), side(20));
+    width > 0 && (width == height || (height > width && height.is_multiple_of(width)))
+}
+
+/// The region name for a GUI texture path, e.g.
+/// `"assets/minecraft/textures/gui/container/inventory.png"` → `"container/inventory"`.
+fn gui_texture_name(path: &str) -> Option<String> {
+    if let Some((_, name)) = EXTRA_GUI_TEXTURES.iter().find(|(extra, _)| *extra == path) {
+        return Some((*name).to_string());
+    }
+    let relative = path
+        .strip_prefix(GUI_TEXTURES_PREFIX)?
+        .strip_suffix(".png")?;
+    if relative.is_empty() {
+        return None;
+    }
+    Some(relative.to_string())
+}
+
+/// The name of an achievement map tile texture, `None` for any other path.
+fn tile_name(path: &str) -> Option<&'static str> {
+    let name = path
+        .strip_prefix(BLOCK_TEXTURES_PREFIX)?
+        .strip_suffix(".png")?;
+    ACHIEVEMENT_TILES.iter().copied().find(|tile| *tile == name)
+}
+
+/// Decodes the achievement map tiles among `files` for atlas packing.
+fn decode_tile_textures(files: &BTreeMap<String, Vec<u8>>) -> AssetsResult<Vec<GuiImage>> {
+    let mut images = Vec::new();
+    for (path, bytes) in files {
+        let Some(name) = tile_name(path) else {
+            continue;
+        };
+        let decoded = DecodedPng::decode(path, bytes)?;
+        images.push(GuiImage {
+            name: format!("blocks/{name}"),
+            width: decoded.width,
+            height: decoded.height,
+            pixels: decoded.pixels,
+        });
+    }
+    Ok(images)
+}
+
+/// Decodes all GUI PNGs into images ready for atlas packing.
+fn decode_gui_textures(raw: &BTreeMap<String, Vec<u8>>) -> AssetsResult<Vec<GuiImage>> {
+    let named: Vec<_> = raw
+        .iter()
+        .filter_map(|(path, bytes)| Some((gui_texture_name(path)?, path, bytes)))
+        .collect();
+    decode_in_parallel(&named, |(name, path, bytes)| {
+        let decoded = DecodedPng::decode(path, bytes)?;
+        Ok(GuiImage {
+            name: name.clone(),
+            width: decoded.width,
+            height: decoded.height,
+            pixels: decoded.pixels,
+        })
+    })
+}
+
+/// Runs `decode` over `items` on all cores, keeping their order; the first
+/// error in item order wins, as in a sequential loop.
+///
+/// A 1.8 jar holds about a thousand PNGs to inflate, and a 32x or 64x pack
+/// many more pixels: one core spent most of the load on them.
+fn decode_in_parallel<T: Sync, R: Send>(
+    items: &[T],
+    decode: impl Fn(&T) -> AssetsResult<R> + Sync,
+) -> AssetsResult<Vec<R>> {
+    let threads = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .min(8);
+    if threads <= 1 || items.len() < 32 {
+        return items.iter().map(&decode).collect();
+    }
+    let chunk = items.len().div_ceil(threads);
+    let decode = &decode;
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = items
+            .chunks(chunk)
+            .map(|part| scope.spawn(move || part.iter().map(decode).collect::<Vec<_>>()))
+            .collect();
+        let mut out = Vec::with_capacity(items.len());
+        for worker in workers {
+            let results = worker
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+            for result in results {
+                out.push(result?);
+            }
+        }
+        Ok(out)
+    })
+}
+
+/// Builds the deterministic atlas from decoded textures.
+///
+/// A block or item texture whose `.mcmeta` describes an animation keeps its
+/// first frame in the layer and hands all its frames to a
+/// [`TextureAnimation`]; a strip without metadata stays on its first frame, as
+/// in the reference.
+fn build_atlas(
+    textures: Vec<TextureLayer>,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> AssetsResult<BlockAtlas> {
+    let edge = atlas_frame_edge(&textures)?;
+    let mut layers = BTreeMap::new();
+    let mut strips = Vec::new();
+    let mut dial_strips = Vec::new();
+    // Still textures larger than the layers, at their own size.
+    let mut large: Vec<(String, usize, Vec<u8>)> = Vec::new();
+    for texture in textures {
+        let TextureLayer { key, path, image } = texture;
+        let count = image.frame_count(&path)?;
+        let meta = files
+            .get(&format!("{path}.mcmeta"))
+            .and_then(|bytes| AnimationMeta::parse(bytes));
+        let frames = || {
+            (0..count)
+                .map(|index| image.frame_at(index, edge, &path))
+                .collect::<AssetsResult<Vec<_>>>()
+        };
+        // The clock and the compass carry an empty `.mcmeta`: the reference
+        // picks their frame from the heading and the time of day
+        // (`TextureAtlasSpriteClock/Compass`), not from a timeline.
+        if let (Some(kind), true) = (DialKind::from_key(&key), count > 1) {
+            let frames = frames()?;
+            layers.insert(key.clone(), frames[0].clone());
+            dial_strips.push((key, kind, frames));
+            continue;
+        }
+        // Items share the atlas of the blocks in the reference and play their
+        // `.mcmeta` the same way (`TextureMap.updateAnimations`).
+        // shortcut: the frames of an animated item are brought to the block
+        // edge, so a high-resolution animated item is blurrier than a still
+        // one (see `hires_layers`); upgrade if a pack needs it.
+        let animated = key.starts_with("blocks/") || key.starts_with("items/");
+        if let (Some(meta), true, true) = (meta, count > 1, animated) {
+            let frames = frames()?;
+            layers.insert(key.clone(), frames[0].clone());
+            strips.push((key, frames, meta));
+        } else {
+            let native = image.frame_edge(&path)?;
+            if count == 1 && native > edge {
+                large.push((
+                    key.clone(),
+                    native as usize,
+                    image.frame_at(0, native, &path)?,
+                ));
+            }
+            layers.insert(key, image.frame_at(0, edge, &path)?);
+        }
+    }
+
+    let layout = AtlasLayout::from_keys(layers.keys().cloned());
+    let layer_len = pixel_bytes(edge, edge)
+        .ok_or_else(|| image_error("atlas", "the atlas frame size overflows"))?;
+    let mut pixels = Vec::with_capacity(
+        layer_len
+            .checked_mul(usize::try_from(layout.layer_count()).unwrap_or(usize::MAX))
+            .ok_or_else(|| image_error("atlas", "the atlas pixel count overflows"))?,
+    );
+    pixels.extend_from_slice(&missing_checker(edge, edge));
+    for key in layout.keys().iter().skip(1) {
+        let frame = layers
+            .remove(key)
+            .ok_or_else(|| image_error(key, "the texture is missing from the decoded set"))?;
+        pixels.extend_from_slice(&frame);
+    }
+
+    let animations = strips
+        .into_iter()
+        .filter_map(|(key, frames, meta)| TextureAnimation::new(layout.layer(&key)?, frames, &meta))
+        .collect();
+    let dials = dial_strips
+        .into_iter()
+        .filter_map(|(key, kind, frames)| DialSprite::new(layout.layer(&key)?, kind, frames))
+        .collect();
+    let (hires_edge, hires) = hires_layers(large, &layout);
+    Ok(BlockAtlas::new(edge, edge, pixels, layout)?
+        .with_animations(animations)
+        .with_dials(dials)
+        .with_hires(hires_edge, hires))
+}
+
+/// The second array: the still textures larger than the main layers, all
+/// brought to the size of the largest (at most [`MAX_HIRES_EDGE`]) and kept
+/// while they fit [`HIRES_BUDGET_BYTES`], in layer order.
+fn hires_layers(
+    mut large: Vec<(String, usize, Vec<u8>)>,
+    layout: &AtlasLayout,
+) -> (u32, Vec<HiresLayer>) {
+    let Some(widest) = large.iter().map(|(_, native, _)| *native).max() else {
+        return (0, Vec::new());
+    };
+    let edge = widest.min(MAX_HIRES_EDGE as usize);
+    let capacity = (HIRES_BUDGET_BYTES / (edge * edge * 4)).max(1);
+    large.sort_by_key(|(key, _, _)| layout.layer(key));
+    let layers: Vec<HiresLayer> = large
+        .into_iter()
+        .filter_map(|(key, native, frame)| {
+            Some(HiresLayer {
+                layer: layout.layer(&key)?,
+                pixels: resize_frame(&frame, native, edge),
+            })
+        })
+        .take(capacity)
+        .collect();
+    // `edge` fits in a u32: it is at most `MAX_HIRES_EDGE`.
+    (edge as u32, layers)
+}
+
+/// A square RGBA frame brought from `from` to `to` pixels: averaged when it
+/// shrinks, nearest-neighbour when it grows.
+fn resize_frame(frame: &[u8], from: usize, to: usize) -> Vec<u8> {
+    if from == to {
+        return frame.to_vec();
+    }
+    if from > to {
+        return box_average(frame, from, to);
+    }
+    let mut out = Vec::with_capacity(to * to * 4);
+    for y in 0..to {
+        for x in 0..to {
+            let at = ((y * from / to) * from + x * from / to) * 4;
+            out.extend_from_slice(&frame[at..at + 4]);
+        }
+    }
+    out
+}
+
+/// The atlas edge is the largest frame edge of any block texture, at most
+/// [`MAX_ATLAS_EDGE`].
+///
+/// 1.8.8 contains 32×32 frames (the flowing water and lava strips), so the
+/// whole atlas is built at 32×32 and the 16×16 textures are upscaled. Using the
+/// most common size instead would crop three quarters of those 32-wide frames.
+/// A still texture larger than the edge (an item of a resource pack) keeps its
+/// own size in the second array, see [`hires_layers`].
+fn atlas_frame_edge(textures: &[TextureLayer]) -> AssetsResult<u32> {
+    let mut edge = 0;
+    for texture in textures {
+        // Only the blocks set the size of every layer: a larger item is kept
+        // at its own size in the second array (see `HiresLayer`).
+        if texture.key.starts_with("blocks/") {
+            edge = edge.max(texture.image.frame_edge(&texture.path)?);
+        }
+    }
+    if edge == 0 {
+        return Ok(DEFAULT_FRAME_SIZE);
+    }
+    // shortcut: a layer is at most 256 pixels (about 230 MB for 644 layers with
+    // mips), so a 512x or 1024x block pack is shrunk in the main array; its
+    // textures that fit the second array's budget still keep their size there.
+    Ok(edge.min(MAX_ATLAS_EDGE))
+}
+
+/// The original Cindral missing-texture layer: an opaque checker that is not
+/// derived from any Mojang art.
+fn missing_checker(width: u32, height: u32) -> Vec<u8> {
+    const LIGHT: [u8; 4] = [232, 96, 160, 255];
+    const DARK: [u8; 4] = [36, 28, 44, 255];
+
+    let capacity = pixel_bytes(width, height).unwrap_or(0);
+    let mut pixels = Vec::with_capacity(capacity);
+    for y in 0..height {
+        for x in 0..width {
+            let color = if (x + y) % 2 == 0 { LIGHT } else { DARK };
+            pixels.extend_from_slice(&color);
+        }
+    }
+    pixels
+}
+
+/// Byte length of `width`×`height` RGBA8 pixels, or `None` on overflow.
+fn pixel_bytes(width: u32, height: u32) -> Option<usize> {
+    usize::try_from(
+        u64::from(width)
+            .checked_mul(u64::from(height))?
+            .checked_mul(4)?,
+    )
+    .ok()
+}
+
+/// Expands two-channel gray+alpha pixels to RGBA8.
+fn gray_alpha_to_rgba(pixels: &[u8]) -> Vec<u8> {
+    let mut rgba = Vec::with_capacity(pixels.len() * 2);
+    for pixel in pixels.chunks_exact(2) {
+        rgba.extend_from_slice(&[pixel[0], pixel[0], pixel[0], pixel[1]]);
+    }
+    rgba
+}
+
+/// Expands three-channel RGB pixels to opaque RGBA8.
+fn rgb_to_rgba(pixels: &[u8]) -> Vec<u8> {
+    let mut rgba = Vec::with_capacity(pixels.len() / 3 * 4);
+    for pixel in pixels.chunks_exact(3) {
+        rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+    }
+    rgba
+}
+
+/// Expands one-channel grayscale pixels to opaque RGBA8.
+fn gray_to_rgba(pixels: &[u8]) -> Vec<u8> {
+    let mut rgba = Vec::with_capacity(pixels.len() * 4);
+    for &gray in pixels {
+        rgba.extend_from_slice(&[gray, gray, gray, 255]);
+    }
+    rgba
+}
+
+/// Builds an [`crate::AssetsError::Image`] with a consistent diagnostic.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::AssetsError;
+
+    #[test]
+    fn only_the_achievement_tiles_join_the_gui_atlas() {
+        let path = |name: &str| format!("assets/minecraft/textures/blocks/{name}.png");
+        assert_eq!(tile_name(&path("sand")), Some("sand"));
+        assert_eq!(tile_name(&path("diamond_ore")), Some("diamond_ore"));
+        assert_eq!(tile_name(&path("glass")), None);
+        assert_eq!(tile_name("assets/minecraft/textures/items/sand.png"), None);
+    }
+
+    #[test]
+    fn texture_keys_are_relative_to_the_texture_root() {
+        assert_eq!(
+            texture_key("assets/minecraft/textures/blocks/stone.png").as_deref(),
+            Some("blocks/stone")
+        );
+        assert_eq!(
+            texture_key("assets/minecraft/textures/items/apple.png").as_deref(),
+            Some("items/apple")
+        );
+        assert_eq!(
+            texture_key("assets/minecraft/textures/gui/container/inventory.png"),
+            None
+        );
+        assert_eq!(
+            texture_key("assets/minecraft/textures/blocks/stone.png.mcmeta"),
+            None
+        );
+        assert_eq!(
+            texture_key("assets/minecraft/models/block/stone.json"),
+            None
+        );
+    }
+
+    fn png_bytes(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut encoder = png::Encoder::new(&mut out, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().expect("header");
+        writer.write_image_data(rgba).expect("data");
+        writer.finish().expect("finish");
+        out
+    }
+
+    #[test]
+    fn the_glint_texture_is_decoded_when_present_and_optional_otherwise() {
+        let bytes = png_bytes(2, 1, &[1, 2, 3, 255, 4, 5, 6, 255]);
+        let resources = ClientResources::build_internal(
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Some(bytes),
+        )
+        .expect("build");
+        let glint = resources.glint_texture().expect("glint");
+        assert_eq!((glint.width, glint.height), (2, 1));
+        assert_eq!(glint.pixels, [1, 2, 3, 255, 4, 5, 6, 255]);
+
+        let empty = ClientResources::build_internal(
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            None,
+        )
+        .expect("build");
+        assert!(empty.glint_texture().is_none());
+    }
+
+    #[test]
+    fn a_corrupt_glint_texture_is_an_image_error() {
+        let result = ClientResources::build_internal(
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Some(vec![1, 2, 3]),
+        );
+        assert!(matches!(result, Err(AssetsError::Image { .. })));
+    }
+
+    fn png_header(width: u32, height: u32) -> Vec<u8> {
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        png.extend(width.to_be_bytes());
+        png.extend(height.to_be_bytes());
+        png
+    }
+
+    #[test]
+    fn a_pack_texture_must_be_a_square_or_a_strip_of_squares() {
+        assert!(has_texture_shape(&png_header(16, 16)));
+        assert!(has_texture_shape(&png_header(16, 512)));
+        assert!(
+            !has_texture_shape(&png_header(4, 159)),
+            "lava_flow_unfinished"
+        );
+        assert!(!has_texture_shape(&png_header(16, 8)));
+        assert!(!has_texture_shape(&png_header(0, 0)));
+        assert!(!has_texture_shape(b"not a png at all, but long enough"));
+    }
+
+    #[test]
+    fn gui_textures_are_recognised_and_named() {
+        assert!(is_gui_texture(
+            "assets/minecraft/textures/gui/container/inventory.png"
+        ));
+        assert!(is_gui_texture("assets/minecraft/textures/gui/widgets.png"));
+        assert!(is_gui_texture(UNKNOWN_SERVER_PATH));
+        assert_eq!(
+            gui_texture_name(UNKNOWN_SERVER_PATH).as_deref(),
+            Some("misc/unknown_server")
+        );
+        // The two icons of the resource packs screen join the atlas too.
+        assert!(is_gui_texture(UNKNOWN_PACK_PATH));
+        assert_eq!(
+            gui_texture_name(UNKNOWN_PACK_PATH).as_deref(),
+            Some("misc/unknown_pack")
+        );
+        assert!(is_gui_texture(DEFAULT_PACK_PATH));
+        assert_eq!(
+            gui_texture_name(DEFAULT_PACK_PATH).as_deref(),
+            Some("misc/default_pack")
+        );
+        assert!(!is_gui_texture("pack.png.mcmeta"));
+        assert!(!is_gui_texture("assets/pack.png"));
+        assert!(!is_gui_texture("assets/minecraft/textures/misc/shadow.png"));
+        assert!(!is_gui_texture(
+            "assets/minecraft/textures/gui/container/inventory.png.mcmeta"
+        ));
+        assert!(!is_gui_texture(
+            "assets/minecraft/textures/blocks/stone.png"
+        ));
+
+        assert_eq!(
+            gui_texture_name("assets/minecraft/textures/gui/container/inventory.png").as_deref(),
+            Some("container/inventory")
+        );
+        assert_eq!(
+            gui_texture_name("assets/minecraft/textures/gui/widgets.png").as_deref(),
+            Some("widgets")
+        );
+    }
+
+    #[test]
+    fn only_the_model_and_blockstate_prefixes_are_resources() {
+        assert!(is_json_resource("assets/minecraft/blockstates/stone.json"));
+        assert!(is_json_resource("assets/minecraft/models/block/stone.json"));
+        assert!(is_json_resource("assets/minecraft/models/item/stone.json"));
+        assert!(!is_json_resource("assets/minecraft/lang/en_US.json"));
+        assert!(is_texture_metadata(
+            "assets/minecraft/textures/blocks/water_still.png.mcmeta"
+        ));
+        assert!(!is_texture_metadata(
+            "assets/minecraft/textures/blocks/water_still.png"
+        ));
+    }
+
+    #[test]
+    fn the_missing_layer_is_an_opaque_checker() {
+        let pixels = missing_checker(2, 2);
+        assert_eq!(pixels.len(), 16);
+        let texel = |x: usize, y: usize| &pixels[(y * 2 + x) * 4..(y * 2 + x + 1) * 4];
+        assert_eq!(texel(0, 0)[3], 255);
+        assert_eq!(texel(1, 0)[3], 255);
+        assert_ne!(texel(0, 0), texel(1, 0));
+        assert_eq!(texel(0, 0), texel(1, 1));
+    }
+
+    /// A texture layer with empty pixels, enough for size-only tests.
+    fn texture(width: u32, height: u32) -> TextureLayer {
+        TextureLayer {
+            key: String::new(),
+            path: String::new(),
+            image: DecodedPng {
+                width,
+                height,
+                pixels: Vec::new(),
+            },
+        }
+    }
+
+    fn keyed(key: &str, width: u32, height: u32) -> TextureLayer {
+        TextureLayer {
+            key: key.to_string(),
+            ..texture(width, height)
+        }
+    }
+
+    #[test]
+    fn the_atlas_edge_is_the_largest_block_frame_width() {
+        let textures = vec![
+            keyed("blocks/water_flow", 32, 32),
+            keyed("blocks/water_still", 16, 512),
+            keyed("blocks/stone", 16, 16),
+            keyed("items/apple", 16, 16),
+        ];
+        assert_eq!(
+            atlas_frame_edge(&textures).expect("every texture is a valid frame"),
+            32
+        );
+    }
+
+    #[test]
+    fn only_the_blocks_set_the_layer_size_and_it_is_capped() {
+        // A pack's 512 pixel ender pearl does not grow the 600 layers.
+        let with_item = vec![
+            keyed("blocks/stone", 64, 64),
+            keyed("items/ender_pearl", 512, 512),
+        ];
+        assert_eq!(atlas_frame_edge(&with_item).expect("valid"), 64);
+        let hd = vec![keyed("blocks/stone", 1024, 1024)];
+        assert_eq!(atlas_frame_edge(&hd).expect("valid"), MAX_ATLAS_EDGE);
+        let items = vec![keyed("items/apple", 16, 16)];
+        assert_eq!(atlas_frame_edge(&items).expect("valid"), DEFAULT_FRAME_SIZE);
+    }
+
+    #[test]
+    fn large_textures_keep_their_size_in_the_second_array() {
+        let layout =
+            AtlasLayout::from_keys(["blocks/stone".to_string(), "items/pearl".to_string()]);
+        let pearl = ("items/pearl".to_string(), 8_usize, vec![7_u8; 8 * 8 * 4]);
+        let (edge, layers) = hires_layers(vec![pearl], &layout);
+        assert_eq!(edge, 8);
+        assert_eq!(layers.len(), 1);
+        assert_eq!(Some(layers[0].layer), layout.layer("items/pearl"));
+        assert_eq!(layers[0].pixels.len(), 8 * 8 * 4, "native size, not shrunk");
+        assert_eq!(hires_layers(Vec::new(), &layout), (0, Vec::new()));
+    }
+
+    #[test]
+    fn textures_of_other_sizes_are_brought_to_the_largest() {
+        let layout = AtlasLayout::from_keys(["items/a".to_string(), "items/b".to_string()]);
+        let small = ("items/a".to_string(), 4_usize, vec![1_u8; 4 * 4 * 4]);
+        let big = ("items/b".to_string(), 8_usize, vec![2_u8; 8 * 8 * 4]);
+        let (edge, layers) = hires_layers(vec![small, big], &layout);
+        assert_eq!(edge, 8);
+        assert!(layers.iter().all(|layer| layer.pixels.len() == 8 * 8 * 4));
+    }
+
+    #[test]
+    fn shrinking_averages_the_covered_pixels_and_ignores_transparent_ones() {
+        // 4x4 to 2x2: each target pixel covers a 2x2 block.
+        let mut frame = vec![0_u8; 4 * 4 * 4];
+        let mut put = |x: usize, y: usize, rgba: [u8; 4]| {
+            frame[(y * 4 + x) * 4..][..4].copy_from_slice(&rgba);
+        };
+        for (x, y) in [(0, 0), (1, 0), (0, 1)] {
+            put(x, y, [100, 0, 0, 255]);
+        }
+        put(1, 1, [255, 255, 255, 0]); // transparent: must not tint the result
+        for x in 2..4 {
+            for y in 0..4 {
+                put(x, y, [10, 20, 30, 255]);
+            }
+        }
+        let out = box_average(&frame, 4, 2);
+        assert_eq!(
+            &out[..4],
+            &[100, 0, 0, 191],
+            "alpha averaged, colour not washed"
+        );
+        assert_eq!(&out[4..8], &[10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn a_wide_or_irregular_image_is_not_a_frame() {
+        for (width, height) in [(32, 16), (16, 24), (16, 20)] {
+            let err = texture(width, height)
+                .image
+                .frame_edge("test")
+                .expect_err("the image is not a square or an animation strip");
+            assert!(matches!(err, AssetsError::Image { .. }));
+        }
+    }
+
+    #[test]
+    fn square_and_vertical_strip_frames_have_their_width_as_edge() {
+        assert_eq!(
+            texture(16, 16)
+                .image
+                .frame_edge("square")
+                .expect("a square image is a frame"),
+            16
+        );
+        assert_eq!(
+            texture(16, 512)
+                .image
+                .frame_edge("animated")
+                .expect("an animation strip is a frame"),
+            16
+        );
+        assert_eq!(
+            texture(32, 1024)
+                .image
+                .frame_edge("wide animation")
+                .expect("a 32-wide animation strip is a frame"),
+            32
+        );
+    }
+}
