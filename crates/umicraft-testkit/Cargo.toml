@@ -1,0 +1,53 @@
+[package]
+name = "umicraft-testkit"
+description = "Fake 1.8 server, packet capture format, and decoder fuzz targets for testing Umicraft."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+glam = "0.34"
+png.workspace = true
+rsa.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+umicraft-auth.workspace = true
+umicraft-game.workspace = true
+umicraft-net.workspace = true
+umicraft-protocol.workspace = true
+umicraft-world.workspace = true
+
+[[bin]]
+name = "umicraft-movement-probe"
+path = "src/bin/movement_probe.rs"
+
+[[bin]]
+name = "umicraft-packet-logger"
+path = "src/bin/packet_logger.rs"
+
+[[bin]]
+name = "umicraft-capture-inspect"
+path = "src/bin/capture_inspect.rs"
+
+[[bin]]
+name = "umicraft-capture-replay"
+path = "src/bin/capture_replay.rs"
+
+[[bin]]
+name = "umicraft-screenshot-diff"
+path = "src/bin/screenshot_diff.rs"
+
+[[bin]]
+name = "umicraft-trace-diff"
+path = "src/bin/trace_diff.rs"
+
+[[bin]]
+name = "umicraft-trajectory-diff"
+path = "src/bin/trajectory_diff.rs"
+
+[lints]
+workspace = true

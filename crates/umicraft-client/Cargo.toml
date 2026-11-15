@@ -1,0 +1,59 @@
+[package]
+name = "umicraft-client"
+description = "Umicraft graphical client: network streaming, world building, meshing, wgpu window, and offscreen screenshots."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+base64 = "0.23"
+glam = "0.34"
+png.workspace = true
+jpeg-decoder.workspace = true
+pollster = "1"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+webbrowser = "1.2"
+tracing.workspace = true
+tracing-subscriber.workspace = true
+umicraft-assets.workspace = true
+umicraft-auth.workspace = true
+umicraft-audio.workspace = true
+umicraft-builtin-mods.workspace = true
+umicraft-core.workspace = true
+umicraft-game.workspace = true
+umicraft-mesh.workspace = true
+umicraft-model.workspace = true
+umicraft-net.workspace = true
+umicraft-protocol.workspace = true
+umicraft-render.workspace = true
+umicraft-ui.workspace = true
+umicraft-world.workspace = true
+# `wayland-data-control`: without it Linux only gets the X11 backend, and a copy made on
+# Wayland is not seen by Wayland-native applications (docs/sources.md, 2026-11-09).
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+wgpu = "30.0.1"
+winit = "0.30.8"
+memory-stats = "1.2.0"
+
+[target.'cfg(windows)'.dependencies]
+# timeBeginPeriod: a 1 ms timer for the game thread's tick (timer_resolution.rs).
+windows-sys = { version = "0.61", features = ["Win32_Media"] }
+
+[dev-dependencies]
+toml.workspace = true
+
+[[bin]]
+name = "cindral"
+path = "src/main.rs"
+
+[features]
+# Forwards to `umicraft-core/profiling`: puffin CPU spans.
+profiling = ["umicraft-core/profiling"]
+
+[lints]
+workspace = true

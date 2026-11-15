@@ -1,0 +1,205 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! The block/item texture array payload shared with the renderer.
+//!
+//! Every layer is an RGBA8 image of the same size. The builder normalises each
+//! texture to its first square frame (the animated block textures keep the other
+//! frames in a [`crate::TextureAnimation`]) and scales it to the largest frame
+//! edge of the blocks (32×32 for the 1.8.8 jar), but the type keeps the dimensions
+//! explicit so a resource pack can use a different size. A still texture larger
+//! than that also keeps its own size in a [`HiresLayer`]. The layout (and
+//! therefore the layer order) is the deterministic [`AtlasLayout`] from
+//! `umicraft-model`; layer zero is the original missing-texture checker.
+
+use umicraft_model::AtlasLayout;
+
+use crate::animation::TextureAnimation;
+use crate::dial::DialSprite;
+
+/// One texture that is larger than the layers of its atlas, kept at its own
+/// resolution next to the layer that holds its shrunk copy.
+///
+/// Vanilla keeps the items in a separate atlas whose sprites keep their size,
+/// so a 512 pixel ender pearl costs 1 MB. Here every layer of the array has the
+/// same size, and giving a single large texture a layer of its own size would
+/// make all of them that large; these go to a second, small array instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HiresLayer {
+    /// The layer of the main array that holds the shrunk copy: the renderer
+    /// samples this texture instead of it.
+    pub layer: u32,
+    /// RGBA8 pixels, `hires_edge` squared.
+    pub pixels: Vec<u8>,
+}
+
+/// One texture-array upload: layer-major RGBA8 pixels plus their key layout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockAtlas {
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
+    layout: AtlasLayout,
+    animations: Vec<TextureAnimation>,
+    dials: Vec<DialSprite>,
+    hires_edge: u32,
+    hires: Vec<HiresLayer>,
+}
+
+impl BlockAtlas {
+    /// Builds an atlas from already decoded layers in layout order.
+    ///
+    /// `pixels` must be exactly `width * height * 4 * layout.layer_count()` bytes
+    /// long. The first layer is expected to be the missing-texture checker,
+    /// though this constructor only validates the arithmetic.
+    ///
+    /// # Errors
+    /// [`crate::AssetsError::Image`] when a dimension is zero, the layout is
+    /// empty, the dimensions or pixel length do not match the layer count, or
+    /// the size arithmetic overflows.
+    pub fn new(
+        width: u32,
+        height: u32,
+        pixels: Vec<u8>,
+        layout: AtlasLayout,
+    ) -> crate::AssetsResult<Self> {
+        if width == 0 || height == 0 {
+            return Err(crate::AssetsError::Image {
+                path: "atlas".to_string(),
+                reason: format!("the layer size {width}x{height} is empty"),
+            });
+        }
+        let expected = u64::from(width)
+            .checked_mul(u64::from(height))
+            .and_then(|pixels| pixels.checked_mul(4))
+            .and_then(|bytes| bytes.checked_mul(u64::from(layout.layer_count())))
+            .ok_or_else(|| crate::AssetsError::Image {
+                path: "atlas".to_string(),
+                reason: "the texture array size overflows".to_string(),
+            })?;
+        if pixels.len() as u64 != expected {
+            return Err(crate::AssetsError::Image {
+                path: "atlas".to_string(),
+                reason: format!(
+                    "{} layers of {width}x{height} need {expected} bytes, got {}",
+                    layout.layer_count(),
+                    pixels.len()
+                ),
+            });
+        }
+        Ok(Self {
+            width,
+            height,
+            pixels,
+            layout,
+            animations: Vec::new(),
+            dials: Vec::new(),
+            hires_edge: 0,
+            hires: Vec::new(),
+        })
+    }
+
+    /// Attaches the textures kept at a larger size, each `edge` squared.
+    #[must_use]
+    pub(crate) fn with_hires(mut self, edge: u32, hires: Vec<HiresLayer>) -> Self {
+        self.hires_edge = edge;
+        self.hires = hires;
+        self
+    }
+
+    /// Edge of the layers of the second array, `0` when there are none.
+    #[must_use]
+    pub fn hires_edge(&self) -> u32 {
+        self.hires_edge
+    }
+
+    /// The textures that keep a larger size than the layers of the main array.
+    #[must_use]
+    pub fn hires_layers(&self) -> &[HiresLayer] {
+        &self.hires
+    }
+
+    /// Attaches the animated layers of this atlas.
+    #[must_use]
+    pub(crate) fn with_animations(mut self, animations: Vec<TextureAnimation>) -> Self {
+        self.animations = animations;
+        self
+    }
+
+    /// Attaches the compass and clock sprites of this atlas.
+    #[must_use]
+    pub(crate) fn with_dials(mut self, dials: Vec<DialSprite>) -> Self {
+        self.dials = dials;
+        self
+    }
+
+    /// The compass and the clock, whose frame the game state chooses.
+    #[must_use]
+    pub fn dials(&self) -> &[DialSprite] {
+        &self.dials
+    }
+
+    /// The animated layers (water, lava, fire, portal...), each at its first
+    /// step. Clone them to get an independent timeline.
+    #[must_use]
+    pub fn animations(&self) -> &[TextureAnimation] {
+        &self.animations
+    }
+
+    /// Edge length of one layer in texels.
+    #[must_use]
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Height of one layer in texels.
+    #[must_use]
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// Number of layers.
+    #[must_use]
+    pub fn layers(&self) -> u32 {
+        self.layout.layer_count()
+    }
+
+    /// Layer-major tightly packed RGBA8 pixels.
+    #[must_use]
+    pub fn pixels(&self) -> &[u8] {
+        &self.pixels
+    }
+
+    /// Texture-key to layer mapping.
+    #[must_use]
+    pub fn layout(&self) -> &AtlasLayout {
+        &self.layout
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_two_layer_two_by_two_atlas_has_the_expected_length() {
+        let layout = AtlasLayout::from_keys(["blocks/stone"]);
+        let atlas = BlockAtlas::new(2, 2, vec![7; 2 * 2 * 4 * 2], layout)
+            .expect("a matching buffer is accepted");
+        assert_eq!(atlas.width(), 2);
+        assert_eq!(atlas.height(), 2);
+        assert_eq!(atlas.layers(), 2);
+        assert_eq!(atlas.pixels().len(), 32);
+    }
+
+    #[test]
+    fn an_empty_buffer_or_zero_size_is_rejected() {
+        let layout = AtlasLayout::from_keys(["blocks/stone"]);
+        let err = BlockAtlas::new(2, 2, Vec::new(), layout.clone())
+            .expect_err("a short buffer must fail");
+        assert!(matches!(err, crate::AssetsError::Image { .. }));
+
+        let err =
+            BlockAtlas::new(0, 2, Vec::new(), layout).expect_err("a zero dimension must fail");
+        assert!(matches!(err, crate::AssetsError::Image { .. }));
+    }
+}
