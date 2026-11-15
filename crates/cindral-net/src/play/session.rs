@@ -1,0 +1,1347 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! The I/O-free play session: one clientbound packet in, one [`Reaction`] out
+//! (ADR-0010).
+//!
+//! The session never touches a socket, so it can be raced in a `select!`
+//! without risk and tested packet by packet. [`super::drive`] is the loop that
+//! feeds it and writes what it answers.
+
+use cindral_protocol::packets::play::clientbound::{
+    self, Animation, AttachEntity, BlockChange, ChunkData, DestroyEntities, EntityEquipment,
+    EntityHeadLook, EntityLook, EntityLookMove, EntityMetadata, EntityRelativeMove, EntityStatus,
+    EntityTeleport, EntityVelocity, MapChunkBulk, MultiBlockChange, OpenWindow, PositionLook,
+    Respawn, SetExperience, SpawnMob, SpawnObject, SpawnPlayer, SpawnPosition, TimeUpdate,
+    UpdateHealth, WindowItems, WindowProperty,
+};
+use cindral_protocol::packets::play::serverbound::{
+    Brand, ClientSettings, KeepAlive, ResourcePackResult, ResourcePackStatus,
+};
+use cindral_protocol::varint::write_var_u32;
+use cindral_protocol::{PlayServerbound, ProtocolError};
+
+use crate::error::NetError;
+use crate::status::disconnect_reason;
+
+/// The most serverbound packets one clientbound packet answers with: the two
+/// entry packets of the first `Join Game`.
+const MAX_REPLIES: usize = 2;
+
+/// The `Chat Message` position byte that routes the text to the action bar.
+const ACTION_BAR_POSITION: u8 = 2;
+/// The `Chat Message` position byte of a system message (command feedback,
+/// join and leave notices): shown in the chat even with "commands only".
+const SYSTEM_POSITION: u8 = 1;
+
+/// Every skin layer shown, as a vanilla client announces by default.
+const ALL_SKIN_PARTS: u8 = 0b0111_1111;
+
+/// Facts captured from `Join Game`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct JoinGameInfo {
+    /// Player's entity id in this world.
+    pub entity_id: i32,
+    /// Raw gamemode byte (1.8 folds hardcore into it).
+    pub gamemode: u8,
+    /// Dimension byte.
+    pub dimension: i8,
+    /// Difficulty byte.
+    pub difficulty: u8,
+    /// Player cap advertised in the packet.
+    pub max_players: u8,
+    /// World type string, e.g. `flat`.
+    pub level_type: String,
+    /// 1.8 trailing reduced-debug flag from `Join Game`.
+    pub reduced_debug_info: bool,
+}
+
+/// The absolute placement imposed by `Player Position and Look` (0x08), after
+/// the relative flags were resolved.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PlayerPlacement {
+    /// X.
+    pub x: f64,
+    /// Y.
+    pub y: f64,
+    /// Z.
+    pub z: f64,
+    /// Yaw.
+    pub yaw: f32,
+    /// Pitch.
+    pub pitch: f32,
+    /// The packet as the server sent it, only when it has relative flags
+    /// (boxed to keep [`PlayEvent`] small).
+    pub raw: Option<Box<RawPlacement>>,
+}
+
+/// A `Player Position and Look` (0x08) before its relative flags are applied.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct RawPlacement {
+    /// X, an offset when bit 0x01 of `flags` is set.
+    pub x: f64,
+    /// Y, an offset when bit 0x02 is set.
+    pub y: f64,
+    /// Z, an offset when bit 0x04 is set.
+    pub z: f64,
+    /// Yaw, an offset when bit 0x08 is set.
+    pub yaw: f32,
+    /// Pitch, an offset when bit 0x10 is set.
+    pub pitch: f32,
+    /// The relative flags.
+    pub flags: u8,
+}
+
+impl PlayerPlacement {
+    /// The placement with the relative flags applied to where the player is
+    /// now (MCP `NetHandlerPlayClient.handlePlayerPosLook`).
+    ///
+    /// The session only knows the previous placement, which is stale as soon
+    /// as the player moved or turned. A relative teleport (GrimAC sends its
+    /// setbacks with relative rotation, so the view does not jump) resolved
+    /// against the stale one lands on the wrong yaw and is ignored by the
+    /// anti-cheat (`BadPacketsN`, observed 2026-11-02).
+    #[must_use]
+    pub fn resolved_against(&self, position: [f64; 3], yaw: f32, pitch: f32) -> Self {
+        let Some(raw) = self.raw.as_deref().copied() else {
+            return self.clone();
+        };
+        let offset = |bit: u8, now: f64, value: f64| {
+            if raw.flags & bit != 0 {
+                now + value
+            } else {
+                value
+            }
+        };
+        Self {
+            x: offset(0x01, position[0], raw.x),
+            y: offset(0x02, position[1], raw.y),
+            z: offset(0x04, position[2], raw.z),
+            yaw: offset(0x08, f64::from(yaw), f64::from(raw.yaw)) as f32,
+            pitch: offset(0x10, f64::from(pitch), f64::from(raw.pitch)) as f32,
+            raw: self.raw.clone(),
+        }
+    }
+
+    /// The `Player Position and Look` (0x06) packet that acknowledges this
+    /// placement.
+    ///
+    /// The 1.8 server ignores the player's movement until it receives it
+    /// (ADR-0005 §A.5). The game thread sends its own acknowledgement after
+    /// applying the correction; this helper serves callers without a
+    /// simulation (the headless binary, the tests).
+    #[must_use]
+    pub fn acknowledgement(&self, on_ground: bool) -> PlayServerbound {
+        PlayServerbound::PositionLook(cindral_protocol::packets::play::serverbound::PositionLook {
+            x: self.x,
+            y: self.y,
+            z: self.z,
+            yaw: self.yaw,
+            pitch: self.pitch,
+            on_ground,
+        })
+    }
+}
+
+/// What the client announces in its entry packets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayOptions {
+    /// Locale string, e.g. `en_us`.
+    pub locale: String,
+    /// Render distance in chunks announced in `Client Settings`.
+    pub view_distance: u8,
+    /// Whether colors are rendered in chat.
+    pub chat_colors: bool,
+    /// The chat visibility byte announced in `Client Settings`: `0` every
+    /// message, `1` commands only, `2` hidden.
+    pub chat_mode: u8,
+    /// The skin-parts byte announced in `Client Settings` (bit `n` shows
+    /// model part `n` of MCP `EnumPlayerModelParts`).
+    pub skin_parts: u8,
+    /// Client brand sent on the `MC|Brand` channel (spec NET-9).
+    pub brand: String,
+    /// Whether the server entry disables server resource packs: the offer is
+    /// then declined at once. Otherwise the game thread answers with
+    /// `Resource Pack Status` packets (accepted, loaded, failed or declined).
+    pub decline_server_packs: bool,
+}
+
+impl Default for PlayOptions {
+    fn default() -> Self {
+        Self {
+            locale: "en_us".to_string(),
+            view_distance: 8,
+            chat_colors: true,
+            chat_mode: 0,
+            skin_parts: ALL_SKIN_PARTS,
+            brand: "cindral".to_string(),
+            decline_server_packs: false,
+        }
+    }
+}
+
+/// A clientbound play packet the game thread consumes.
+///
+/// Keepalives never become events: the session answers them in its
+/// [`Reaction`]. The chunk payloads are boxed so the bounded inbox of the game
+/// thread stays small.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlayEvent {
+    /// The server entered play state and described the world.
+    JoinGame(JoinGameInfo),
+    /// Absolute player placement after resolving the 1.8 relative flags.
+    Placement(PlayerPlacement),
+    /// Chat JSON of a player message (chat position 0).
+    Chat(String),
+    /// Chat JSON of a system message (chat position 1), which the chat
+    /// visibility "commands only" still shows.
+    SystemChat(String),
+    /// A message for the action bar above the hotbar (chat position 2).
+    ActionBar(String),
+    /// The world clock changed (`Time Update`, 0x03).
+    ///
+    /// The signed time of day is preserved: a negative value means the server
+    /// froze the day/night cycle.
+    TimeUpdate(TimeUpdate),
+    /// The player's health, food and saturation.
+    UpdateHealth(UpdateHealth),
+    /// The selected hotbar slot.
+    HeldItemChange(i8),
+    /// The player changed dimension.
+    Respawn(Respawn),
+    /// An entity was teleported.
+    EntityTeleport(EntityTeleport),
+    /// The equipment of an entity.
+    EntityEquipment(EntityEquipment),
+    /// Another player was spawned.
+    SpawnPlayer(SpawnPlayer),
+    /// A mob was spawned.
+    SpawnMob(SpawnMob),
+    /// An object or item was spawned.
+    SpawnObject(SpawnObject),
+    /// Entities were destroyed / removed.
+    DestroyEntities(DestroyEntities),
+    /// An entity moved relative to its previous position.
+    EntityRelativeMove(EntityRelativeMove),
+    /// An entity rotated.
+    EntityLook(EntityLook),
+    /// An entity moved and rotated.
+    EntityLookMove(EntityLookMove),
+    /// An entity's head turned.
+    EntityHeadLook(EntityHeadLook),
+    /// An entity's velocity changed.
+    EntityVelocity(EntityVelocity),
+    /// An entity's metadata changed.
+    EntityMetadata(EntityMetadata),
+    /// An entity was attached (riding / leashed).
+    AttachEntity(AttachEntity),
+    /// An entity status event occurred.
+    EntityStatus(EntityStatus),
+    /// An entity animation occurred.
+    Animation(Animation),
+    /// The world spawn point.
+    SpawnPosition(SpawnPosition),
+    /// The experience bar changed.
+    SetExperience(SetExperience),
+    /// One chunk column, complete or a section update.
+    ChunkData(Box<ChunkData>),
+    /// Initial bulk chunk batch.
+    MapChunkBulk(Box<MapChunkBulk>),
+    /// One block update.
+    BlockChange(BlockChange),
+    /// Batched block updates in one chunk.
+    MultiBlockChange(MultiBlockChange),
+    /// The server opened a container GUI.
+    OpenWindow(OpenWindow),
+    /// The server closed a container GUI.
+    CloseWindow {
+        /// The window id that was closed.
+        window_id: u8,
+    },
+    /// The server updated a single slot.
+    SetSlot(clientbound::SetSlot),
+    /// The server sent all slots of a window.
+    WindowItems(WindowItems),
+    /// A container property changed (e.g. furnace progress).
+    WindowProperty(WindowProperty),
+    /// The server confirmed or rejected a click transaction.
+    ConfirmTransaction(clientbound::ConfirmTransaction),
+    /// `Use Bed` (0x0A): a player went to sleep in a bed.
+    UseBed(clientbound::UseBed),
+    /// `Collect Item` (0x0D): an entity picked up an item or orb.
+    CollectItem(clientbound::CollectItem),
+    /// `Spawn Painting` (0x10): a painting was spawned.
+    SpawnPainting(clientbound::SpawnPainting),
+    /// `Spawn Experience Orb` (0x11): an experience orb was spawned.
+    SpawnXpOrb(clientbound::SpawnXpOrb),
+    /// `Entity Effect` (0x1D): a status effect was applied.
+    EntityEffect(clientbound::EntityEffect),
+    /// `Remove Entity Effect` (0x1E): a status effect ended.
+    RemoveEntityEffect(clientbound::RemoveEntityEffect),
+    /// `Entity Properties` (0x20): attribute values and modifiers.
+    EntityProperties(clientbound::EntityProperties),
+    /// `Block Action` (0x24): a chest lid, note block or piston moved.
+    BlockAction(clientbound::BlockAction),
+    /// `Block Break Animation` (0x25): another player's crack stage.
+    BlockBreakAnim(clientbound::BlockBreakAnim),
+    /// `Explosion` (0x27): blocks destroyed and the knockback of the player.
+    Explosion(clientbound::Explosion),
+    /// `Effect` (0x28): a sound or particle effect at a block.
+    Effect(clientbound::Effect),
+    /// `Sound Effect` (0x29): a named sound at a position.
+    SoundEffect(clientbound::SoundEffect),
+    /// `Particle` (0x2A): server-spawned particles.
+    Particle(clientbound::Particle),
+    /// `Change Game State` (0x2B): rain, gamemode, credits, fade…
+    ChangeGameState(clientbound::ChangeGameState),
+    /// `Spawn Global Entity` (0x2C): a lightning bolt.
+    SpawnGlobalEntity(clientbound::SpawnGlobalEntity),
+    /// `Update Sign` (0x33): the four lines of a sign.
+    UpdateSign(Box<clientbound::UpdateSign>),
+    /// `Maps` (0x34): map icons and pixel columns.
+    Maps(clientbound::Maps),
+    /// `Update Block Entity` (0x35): the NBT of a block entity.
+    UpdateBlockEntity(clientbound::UpdateBlockEntity),
+    /// `Sign Editor Open` (0x36): the player placed a sign to write.
+    SignEditorOpen(clientbound::SignEditorOpen),
+    /// `Statistics` (0x37): the answer to a statistics request.
+    Statistics(clientbound::Statistics),
+    /// `Player List Item` (0x38): tab-list entries and profiles.
+    PlayerListItem(clientbound::PlayerListItem),
+    /// `Player Abilities` (0x39): flying, invulnerability and speeds.
+    PlayerAbilities(clientbound::PlayerAbilities),
+    /// `Tab-Complete` (0x3A): chat completion matches.
+    TabComplete(clientbound::TabComplete),
+    /// `Scoreboard Objective` (0x3B): an objective was created, removed or renamed.
+    ScoreboardObjective(clientbound::ScoreboardObjective),
+    /// `Update Score` (0x3C): a score changed or was removed.
+    UpdateScore(clientbound::UpdateScore),
+    /// `Display Scoreboard` (0x3D): an objective was put in a display slot.
+    DisplayScoreboard(clientbound::DisplayScoreboard),
+    /// `Teams` (0x3E): a team or its members changed.
+    Teams(Box<clientbound::Teams>),
+    /// `Plugin Message` (0x3F): a payload on a named channel.
+    PluginMessage(clientbound::PluginMessage),
+    /// `Server Difficulty` (0x41): the difficulty changed.
+    ServerDifficulty(clientbound::ServerDifficulty),
+    /// `Combat Event` (0x42): combat start, end or a death.
+    CombatEvent(clientbound::CombatEvent),
+    /// `Camera` (0x43): the entity the view follows.
+    Camera(clientbound::Camera),
+    /// `World Border` (0x44): the world border changed.
+    WorldBorder(clientbound::WorldBorder),
+    /// `Title` (0x45): a title, subtitle or their timing.
+    Title(clientbound::Title),
+    /// `Player List Header/Footer` (0x47): the tab-list texts.
+    PlayerListHeaderFooter(clientbound::PlayerListHeaderFooter),
+    /// `Resource Pack Send` (0x48): the server offers a resource pack.
+    ResourcePackSend(clientbound::ResourcePackSend),
+    /// `Update Entity NBT` (0x49): raw entity NBT.
+    UpdateEntityNbt(clientbound::UpdateEntityNbt),
+}
+
+/// What one clientbound packet produced.
+///
+/// A reaction is a value: nothing was sent when it exists. The caller writes
+/// the [`replies`](Self::replies), stops on a [`kick_reason`](Self::kick_reason)
+/// and forwards the [`event`](Self::into_event).
+#[derive(Debug, Default, PartialEq)]
+pub struct Reaction {
+    event: Option<PlayEvent>,
+    replies: [Option<PlayServerbound>; MAX_REPLIES],
+    kick_reason: Option<String>,
+    compression_threshold: Option<i32>,
+}
+
+impl Reaction {
+    /// A reaction that only forwards an event.
+    fn event(event: PlayEvent) -> Self {
+        Self {
+            event: Some(event),
+            ..Self::default()
+        }
+    }
+
+    /// The serverbound packets to write, in order.
+    pub fn replies(&self) -> impl Iterator<Item = &PlayServerbound> {
+        self.replies.iter().flatten()
+    }
+
+    /// The reason of a play `Disconnect`; the session is over when it is set.
+    #[must_use]
+    pub fn kick_reason(&self) -> Option<&str> {
+        self.kick_reason.as_deref()
+    }
+
+    /// The threshold of a play-state `Set Compression` (0x46).
+    ///
+    /// The caller applies it to the connection after writing the replies:
+    /// every later frame uses the new framing (MCP
+    /// `NetHandlerPlayClient.handleSetCompressionLevel`). Some proxies send
+    /// it after the login.
+    #[must_use]
+    pub fn compression_threshold(&self) -> Option<i32> {
+        self.compression_threshold
+    }
+
+    /// The event for the game thread, consuming the reaction.
+    #[must_use]
+    pub fn into_event(self) -> Option<PlayEvent> {
+        self.event
+    }
+}
+
+/// The play-state half of a connection, without I/O (ADR-0010).
+///
+/// ```
+/// use cindral_net::play::{PlayOptions, PlaySession};
+/// use cindral_protocol::packets::play::clientbound::KeepAlive;
+/// use cindral_protocol::{EncodablePacket, PlayServerbound};
+///
+/// let mut session = PlaySession::new(PlayOptions::default());
+/// let mut body = Vec::new();
+/// KeepAlive { id: 7 }.encode_body(&mut body).expect("encodes");
+/// let reaction = session.handle(KeepAlive::ID, &body).expect("valid packet");
+/// assert!(matches!(
+///     reaction.replies().next(),
+///     Some(PlayServerbound::KeepAlive(answer)) if answer.id == 7
+/// ));
+/// ```
+#[derive(Debug)]
+pub struct PlaySession {
+    options: PlayOptions,
+    placement: Option<PlayerPlacement>,
+}
+
+impl PlaySession {
+    /// Creates the session of a connection that just finished its login.
+    #[must_use]
+    pub fn new(options: PlayOptions) -> Self {
+        Self {
+            options,
+            placement: None,
+        }
+    }
+
+    /// Handles one clientbound play packet.
+    ///
+    /// Ids the client does not consume yet produce an empty reaction.
+    ///
+    /// # Errors
+    /// [`NetError::Protocol`] when the body of a handled id is malformed; the
+    /// caller ends the session (spec NET-13).
+    pub fn handle(&mut self, id: u8, body: &[u8]) -> Result<Reaction, NetError> {
+        self.react(id, &mut &body[..]).map_err(|err| {
+            tracing::warn!(packet_id = id, body_len = body.len(), %err, "play packet decode failed");
+            NetError::from(err)
+        })
+    }
+
+    fn react(&mut self, id: u8, body: &mut &[u8]) -> Result<Reaction, ProtocolError> {
+        Ok(match id {
+            clientbound::KeepAlive::ID => {
+                let packet = clientbound::KeepAlive::decode(body)?;
+                let mut reaction = Reaction::default();
+                reaction.replies[0] = Some(PlayServerbound::KeepAlive(KeepAlive { id: packet.id }));
+                reaction
+            }
+            clientbound::JoinGame::ID => self.join_game(clientbound::JoinGame::decode(body)?)?,
+            clientbound::Chat::ID => {
+                let packet = clientbound::Chat::decode(body)?;
+                Reaction::event(match packet.position {
+                    ACTION_BAR_POSITION => PlayEvent::ActionBar(packet.json),
+                    SYSTEM_POSITION => PlayEvent::SystemChat(packet.json),
+                    _ => PlayEvent::Chat(packet.json),
+                })
+            }
+            clientbound::TimeUpdate::ID => {
+                Reaction::event(PlayEvent::TimeUpdate(TimeUpdate::decode(body)?))
+            }
+            clientbound::PositionLook::ID => {
+                let placement = self.resolve_placement(&PositionLook::decode(body)?);
+                self.placement = Some(placement.clone());
+                Reaction::event(PlayEvent::Placement(placement))
+            }
+            clientbound::UpdateHealth::ID => {
+                Reaction::event(PlayEvent::UpdateHealth(UpdateHealth::decode(body)?))
+            }
+            clientbound::HeldItemChange::ID => Reaction::event(PlayEvent::HeldItemChange(
+                clientbound::HeldItemChange::decode(body)?.slot,
+            )),
+            clientbound::Respawn::ID => Reaction::event(PlayEvent::Respawn(Respawn::decode(body)?)),
+            clientbound::EntityTeleport::ID => {
+                Reaction::event(PlayEvent::EntityTeleport(EntityTeleport::decode(body)?))
+            }
+            clientbound::EntityEquipment::ID => {
+                Reaction::event(PlayEvent::EntityEquipment(EntityEquipment::decode(body)?))
+            }
+            clientbound::SpawnPlayer::ID => {
+                Reaction::event(PlayEvent::SpawnPlayer(SpawnPlayer::decode(body)?))
+            }
+            clientbound::SpawnMob::ID => {
+                Reaction::event(PlayEvent::SpawnMob(SpawnMob::decode(body)?))
+            }
+            clientbound::SpawnObject::ID => {
+                Reaction::event(PlayEvent::SpawnObject(SpawnObject::decode(body)?))
+            }
+            clientbound::DestroyEntities::ID => {
+                Reaction::event(PlayEvent::DestroyEntities(DestroyEntities::decode(body)?))
+            }
+            clientbound::Entity::ID => Reaction::default(),
+            clientbound::EntityRelativeMove::ID => Reaction::event(PlayEvent::EntityRelativeMove(
+                EntityRelativeMove::decode(body)?,
+            )),
+            clientbound::EntityLook::ID => {
+                Reaction::event(PlayEvent::EntityLook(EntityLook::decode(body)?))
+            }
+            clientbound::EntityLookMove::ID => {
+                Reaction::event(PlayEvent::EntityLookMove(EntityLookMove::decode(body)?))
+            }
+            clientbound::EntityHeadLook::ID => {
+                Reaction::event(PlayEvent::EntityHeadLook(EntityHeadLook::decode(body)?))
+            }
+            clientbound::EntityVelocity::ID => {
+                Reaction::event(PlayEvent::EntityVelocity(EntityVelocity::decode(body)?))
+            }
+            clientbound::EntityMetadata::ID => {
+                Reaction::event(PlayEvent::EntityMetadata(EntityMetadata::decode(body)?))
+            }
+            clientbound::AttachEntity::ID => {
+                Reaction::event(PlayEvent::AttachEntity(AttachEntity::decode(body)?))
+            }
+            clientbound::EntityStatus::ID => {
+                Reaction::event(PlayEvent::EntityStatus(EntityStatus::decode(body)?))
+            }
+            clientbound::Animation::ID => {
+                Reaction::event(PlayEvent::Animation(Animation::decode(body)?))
+            }
+            clientbound::SpawnPosition::ID => {
+                Reaction::event(PlayEvent::SpawnPosition(SpawnPosition::decode(body)?))
+            }
+            clientbound::SetExperience::ID => {
+                Reaction::event(PlayEvent::SetExperience(SetExperience::decode(body)?))
+            }
+            clientbound::ChunkData::ID => {
+                Reaction::event(PlayEvent::ChunkData(Box::new(ChunkData::decode(body)?)))
+            }
+            clientbound::MapChunkBulk::ID => Reaction::event(PlayEvent::MapChunkBulk(Box::new(
+                MapChunkBulk::decode(body)?,
+            ))),
+            clientbound::BlockChange::ID => {
+                Reaction::event(PlayEvent::BlockChange(BlockChange::decode(body)?))
+            }
+            clientbound::MultiBlockChange::ID => {
+                Reaction::event(PlayEvent::MultiBlockChange(MultiBlockChange::decode(body)?))
+            }
+            clientbound::OpenWindow::ID => {
+                Reaction::event(PlayEvent::OpenWindow(OpenWindow::decode(body)?))
+            }
+            clientbound::CloseWindow::ID => {
+                let packet = clientbound::CloseWindow::decode(body)?;
+                Reaction::event(PlayEvent::CloseWindow {
+                    window_id: packet.window_id,
+                })
+            }
+            clientbound::SetSlot::ID => {
+                Reaction::event(PlayEvent::SetSlot(clientbound::SetSlot::decode(body)?))
+            }
+            clientbound::WindowItems::ID => {
+                Reaction::event(PlayEvent::WindowItems(WindowItems::decode(body)?))
+            }
+            clientbound::WindowProperty::ID => {
+                Reaction::event(PlayEvent::WindowProperty(WindowProperty::decode(body)?))
+            }
+            // The reply is not sent here: it must leave after the replies to
+            // the packets that came before it, so the game thread sends it
+            // (see `Game::answer_transaction`).
+            clientbound::ConfirmTransaction::ID => Reaction::event(PlayEvent::ConfirmTransaction(
+                clientbound::ConfirmTransaction::decode(body)?,
+            )),
+            clientbound::UseBed::ID => {
+                Reaction::event(PlayEvent::UseBed(clientbound::UseBed::decode(body)?))
+            }
+            clientbound::CollectItem::ID => Reaction::event(PlayEvent::CollectItem(
+                clientbound::CollectItem::decode(body)?,
+            )),
+            clientbound::SpawnPainting::ID => Reaction::event(PlayEvent::SpawnPainting(
+                clientbound::SpawnPainting::decode(body)?,
+            )),
+            clientbound::SpawnXpOrb::ID => Reaction::event(PlayEvent::SpawnXpOrb(
+                clientbound::SpawnXpOrb::decode(body)?,
+            )),
+            clientbound::EntityEffect::ID => Reaction::event(PlayEvent::EntityEffect(
+                clientbound::EntityEffect::decode(body)?,
+            )),
+            clientbound::RemoveEntityEffect::ID => Reaction::event(PlayEvent::RemoveEntityEffect(
+                clientbound::RemoveEntityEffect::decode(body)?,
+            )),
+            clientbound::EntityProperties::ID => Reaction::event(PlayEvent::EntityProperties(
+                clientbound::EntityProperties::decode(body)?,
+            )),
+            clientbound::BlockAction::ID => Reaction::event(PlayEvent::BlockAction(
+                clientbound::BlockAction::decode(body)?,
+            )),
+            clientbound::BlockBreakAnim::ID => Reaction::event(PlayEvent::BlockBreakAnim(
+                clientbound::BlockBreakAnim::decode(body)?,
+            )),
+            clientbound::Explosion::ID => {
+                Reaction::event(PlayEvent::Explosion(clientbound::Explosion::decode(body)?))
+            }
+            clientbound::Effect::ID => {
+                Reaction::event(PlayEvent::Effect(clientbound::Effect::decode(body)?))
+            }
+            clientbound::SoundEffect::ID => Reaction::event(PlayEvent::SoundEffect(
+                clientbound::SoundEffect::decode(body)?,
+            )),
+            clientbound::Particle::ID => {
+                Reaction::event(PlayEvent::Particle(clientbound::Particle::decode(body)?))
+            }
+            clientbound::ChangeGameState::ID => Reaction::event(PlayEvent::ChangeGameState(
+                clientbound::ChangeGameState::decode(body)?,
+            )),
+            clientbound::SpawnGlobalEntity::ID => Reaction::event(PlayEvent::SpawnGlobalEntity(
+                clientbound::SpawnGlobalEntity::decode(body)?,
+            )),
+            clientbound::UpdateSign::ID => Reaction::event(PlayEvent::UpdateSign(Box::new(
+                clientbound::UpdateSign::decode(body)?,
+            ))),
+            clientbound::Maps::ID => {
+                Reaction::event(PlayEvent::Maps(clientbound::Maps::decode(body)?))
+            }
+            clientbound::UpdateBlockEntity::ID => Reaction::event(PlayEvent::UpdateBlockEntity(
+                clientbound::UpdateBlockEntity::decode(body)?,
+            )),
+            clientbound::SignEditorOpen::ID => Reaction::event(PlayEvent::SignEditorOpen(
+                clientbound::SignEditorOpen::decode(body)?,
+            )),
+            clientbound::Statistics::ID => Reaction::event(PlayEvent::Statistics(
+                clientbound::Statistics::decode(body)?,
+            )),
+            clientbound::PlayerListItem::ID => Reaction::event(PlayEvent::PlayerListItem(
+                clientbound::PlayerListItem::decode(body)?,
+            )),
+            clientbound::PlayerAbilities::ID => Reaction::event(PlayEvent::PlayerAbilities(
+                clientbound::PlayerAbilities::decode(body)?,
+            )),
+            clientbound::TabComplete::ID => Reaction::event(PlayEvent::TabComplete(
+                clientbound::TabComplete::decode(body)?,
+            )),
+            clientbound::ScoreboardObjective::ID => Reaction::event(
+                PlayEvent::ScoreboardObjective(clientbound::ScoreboardObjective::decode(body)?),
+            ),
+            clientbound::UpdateScore::ID => Reaction::event(PlayEvent::UpdateScore(
+                clientbound::UpdateScore::decode(body)?,
+            )),
+            clientbound::DisplayScoreboard::ID => Reaction::event(PlayEvent::DisplayScoreboard(
+                clientbound::DisplayScoreboard::decode(body)?,
+            )),
+            clientbound::Teams::ID => Reaction::event(PlayEvent::Teams(Box::new(
+                clientbound::Teams::decode(body)?,
+            ))),
+            clientbound::PluginMessage::ID => Reaction::event(PlayEvent::PluginMessage(
+                clientbound::PluginMessage::decode(body)?,
+            )),
+            clientbound::ServerDifficulty::ID => Reaction::event(PlayEvent::ServerDifficulty(
+                clientbound::ServerDifficulty::decode(body)?,
+            )),
+            clientbound::CombatEvent::ID => Reaction::event(PlayEvent::CombatEvent(
+                clientbound::CombatEvent::decode(body)?,
+            )),
+            clientbound::Camera::ID => {
+                Reaction::event(PlayEvent::Camera(clientbound::Camera::decode(body)?))
+            }
+            clientbound::WorldBorder::ID => Reaction::event(PlayEvent::WorldBorder(
+                clientbound::WorldBorder::decode(body)?,
+            )),
+            clientbound::Title::ID => {
+                Reaction::event(PlayEvent::Title(clientbound::Title::decode(body)?))
+            }
+            clientbound::PlayerListHeaderFooter::ID => {
+                Reaction::event(PlayEvent::PlayerListHeaderFooter(
+                    clientbound::PlayerListHeaderFooter::decode(body)?,
+                ))
+            }
+            clientbound::UpdateEntityNbt::ID => Reaction::event(PlayEvent::UpdateEntityNbt(
+                clientbound::UpdateEntityNbt::decode(body)?,
+            )),
+            clientbound::SetCompression::ID => Reaction {
+                compression_threshold: Some(clientbound::SetCompression::decode(body)?.threshold),
+                ..Reaction::default()
+            },
+            clientbound::ResourcePackSend::ID => {
+                self.resource_pack(clientbound::ResourcePackSend::decode(body)?)
+            }
+            clientbound::Disconnect::ID => {
+                let packet = clientbound::Disconnect::decode(body)?;
+                Reaction {
+                    kick_reason: Some(disconnect_reason(&packet.reason)),
+                    ..Reaction::default()
+                }
+            }
+            other => {
+                // Every protocol-47 id is matched above; only a server that
+                // speaks another protocol gets here.
+                tracing::debug!(id = other, bytes = body.len(), "unknown play packet id");
+                Reaction::default()
+            }
+        })
+    }
+
+    /// Forwards a server resource pack offer; declines it at once when the
+    /// server entry disables server packs.
+    ///
+    /// Vanilla answers `Declined` immediately in that case and otherwise
+    /// downloads the pack and reports its status (MCP
+    /// `NetHandlerPlayClient.handleResourcePack`), which the game thread does.
+    fn resource_pack(&self, packet: clientbound::ResourcePackSend) -> Reaction {
+        let reply = self.options.decline_server_packs.then(|| {
+            PlayServerbound::ResourcePackStatus(ResourcePackStatus {
+                hash: packet.hash.clone(),
+                result: ResourcePackResult::Declined,
+            })
+        });
+        Reaction {
+            event: Some(PlayEvent::ResourcePackSend(packet)),
+            replies: [reply, None],
+            ..Reaction::default()
+        }
+    }
+
+    /// Forwards `Join Game` and answers with the entry packets.
+    ///
+    /// Vanilla sends `Client Settings` and `MC|Brand` on *every* `Join Game`
+    /// (MCP `NetHandlerPlayClient.handleJoinGame`), which is how the backend
+    /// server reached through a BungeeCord or Velocity switch learns them
+    /// (NET-10).
+    ///
+    /// The order matters: a 1.8 server that receives them before it switched
+    /// to the play state logs `Bad packet id 21`.
+    fn join_game(&mut self, packet: clientbound::JoinGame) -> Result<Reaction, ProtocolError> {
+        let mut reaction = Reaction::event(PlayEvent::JoinGame(JoinGameInfo {
+            entity_id: packet.entity_id,
+            gamemode: packet.gamemode,
+            dimension: packet.dimension,
+            difficulty: packet.difficulty,
+            max_players: packet.max_players,
+            level_type: packet.level_type,
+            reduced_debug_info: packet.reduced_debug_info,
+        }));
+        reaction.replies = self.entry_packets()?;
+        Ok(reaction)
+    }
+
+    /// The `Client Settings` and `MC|Brand` packets built from the options.
+    fn entry_packets(&self) -> Result<[Option<PlayServerbound>; MAX_REPLIES], ProtocolError> {
+        let settings = ClientSettings {
+            locale: self.options.locale.clone(),
+            view_distance: self.options.view_distance,
+            chat_mode: self.options.chat_mode,
+            chat_colors: self.options.chat_colors,
+            skin_parts: self.options.skin_parts,
+        };
+        // The brand channel carries a length-prefixed string.
+        let brand = self.options.brand.as_bytes();
+        let mut data = Vec::with_capacity(brand.len() + 5);
+        write_var_u32(&mut data, brand.len() as u32)?;
+        data.extend_from_slice(brand);
+        let brand = Brand {
+            channel: "MC|Brand".to_string(),
+            data,
+        };
+        Ok([
+            Some(PlayServerbound::ClientSettings(settings)),
+            Some(PlayServerbound::Brand(brand)),
+        ])
+    }
+
+    /// Applies the 1.8 relative-position flag bits to the previous placement.
+    ///
+    /// Flags: X, Y, Z, yaw, pitch (bits 0–4); vanilla accumulates relative
+    /// components on the last accepted position.
+    fn resolve_placement(&self, packet: &PositionLook) -> PlayerPlacement {
+        let previous = self.placement.clone().unwrap_or_default();
+        let pick = |bit: u8, previous: f64, value: f64| {
+            if packet.flags & bit != 0 {
+                previous + value
+            } else {
+                value
+            }
+        };
+        let pick_angle = |bit: u8, previous: f32, value: f32| {
+            if packet.flags & bit != 0 {
+                previous + value
+            } else {
+                value
+            }
+        };
+        PlayerPlacement {
+            x: pick(0x01, previous.x, packet.x),
+            y: pick(0x02, previous.y, packet.y),
+            z: pick(0x04, previous.z, packet.z),
+            yaw: pick_angle(0x08, previous.yaw, packet.yaw),
+            pitch: pick_angle(0x10, previous.pitch, packet.pitch),
+            raw: (packet.flags & 0x1F != 0).then(|| {
+                Box::new(RawPlacement {
+                    x: packet.x,
+                    y: packet.y,
+                    z: packet.z,
+                    yaw: packet.yaw,
+                    pitch: packet.pitch,
+                    flags: packet.flags,
+                })
+            }),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cindral_protocol::packets::play::ItemStack;
+    use cindral_protocol::{EncodablePacket, PlayClientbound};
+
+    fn body(packet: &impl EncodablePacket) -> Vec<u8> {
+        let mut body = Vec::new();
+        packet.encode_body(&mut body).expect("test packet encodes");
+        body
+    }
+
+    /// Feeds one packet through the generic clientbound enum, so every test
+    /// uses the wire id the protocol crate assigns.
+    fn react(session: &mut PlaySession, packet: PlayClientbound) -> Reaction {
+        let mut body = Vec::new();
+        packet.encode_body(&mut body).expect("test packet encodes");
+        session
+            .handle(packet.packet_id(), &body)
+            .expect("valid packet")
+    }
+
+    fn event(session: &mut PlaySession, packet: PlayClientbound) -> PlayEvent {
+        let reaction = react(session, packet);
+        assert_eq!(reaction.replies().count(), 0, "no reply expected");
+        assert_eq!(reaction.kick_reason(), None);
+        reaction.into_event().expect("the packet becomes an event")
+    }
+
+    #[test]
+    fn the_chat_position_selects_chat_system_or_action_bar_event() {
+        let mut session = PlaySession::new(PlayOptions::default());
+        let chat = |position| {
+            PlayClientbound::Chat(clientbound::Chat {
+                json: "{}".to_string(),
+                position,
+            })
+        };
+        let text = || "{}".to_string();
+        assert_eq!(event(&mut session, chat(0)), PlayEvent::Chat(text()));
+        assert_eq!(event(&mut session, chat(1)), PlayEvent::SystemChat(text()));
+        assert_eq!(event(&mut session, chat(2)), PlayEvent::ActionBar(text()));
+    }
+
+    fn join_game() -> PlayClientbound {
+        PlayClientbound::JoinGame(clientbound::JoinGame {
+            entity_id: 42,
+            gamemode: 1,
+            dimension: -1,
+            difficulty: 2,
+            max_players: 20,
+            level_type: "flat".to_string(),
+            reduced_debug_info: false,
+        })
+    }
+
+    fn position_look(flags: u8) -> PlayClientbound {
+        PlayClientbound::PositionLook(PositionLook {
+            x: 1.5,
+            y: 70.0,
+            z: -2.5,
+            yaw: 15.0,
+            pitch: -20.0,
+            flags,
+        })
+    }
+
+    #[test]
+    fn a_relative_placement_resolves_against_where_the_player_is() {
+        let mut session = PlaySession::new(PlayOptions::default());
+        let PlayEvent::Placement(placement) = event(&mut session, position_look(0x1F)) else {
+            panic!("placement expected");
+        };
+        let now = placement.resolved_against([10.0, 64.0, -4.0], 90.0, 30.0);
+        assert_eq!((now.x, now.y, now.z), (11.5, 134.0, -6.5));
+        assert_eq!((now.yaw, now.pitch), (105.0, 10.0));
+        let absolute = event(&mut session, position_look(0));
+        let PlayEvent::Placement(absolute) = absolute else {
+            panic!("placement expected");
+        };
+        let same = absolute.resolved_against([9.0, 9.0, 9.0], 9.0, 9.0);
+        assert_eq!((same.x, same.yaw), (1.5, 15.0));
+    }
+
+    #[test]
+    fn a_keepalive_is_answered_with_the_same_id_and_no_event() {
+        let mut session = PlaySession::new(PlayOptions::default());
+        let reaction = react(
+            &mut session,
+            PlayClientbound::KeepAlive(clientbound::KeepAlive { id: 4242 }),
+        );
+        let replies: Vec<_> = reaction.replies().cloned().collect();
+        assert_eq!(
+            replies,
+            vec![PlayServerbound::KeepAlive(KeepAlive { id: 4242 })]
+        );
+        assert_eq!(reaction.into_event(), None);
+    }
+
+    #[test]
+    fn the_first_join_game_sends_the_entry_packets_from_the_options() {
+        let options = PlayOptions {
+            locale: "fr_fr".to_string(),
+            view_distance: 12,
+            chat_colors: false,
+            chat_mode: 2,
+            skin_parts: 0b0100_0010,
+            brand: "test".to_string(),
+            ..PlayOptions::default()
+        };
+        let mut session = PlaySession::new(options);
+        let reaction = react(&mut session, join_game());
+
+        let replies: Vec<_> = reaction.replies().cloned().collect();
+        assert_eq!(
+            replies,
+            vec![
+                PlayServerbound::ClientSettings(ClientSettings {
+                    locale: "fr_fr".to_string(),
+                    view_distance: 12,
+                    chat_mode: 2,
+                    chat_colors: false,
+                    skin_parts: 0b0100_0010,
+                }),
+                PlayServerbound::Brand(Brand {
+                    channel: "MC|Brand".to_string(),
+                    data: vec![4, b't', b'e', b's', b't'],
+                }),
+            ]
+        );
+        let Some(PlayEvent::JoinGame(info)) = reaction.into_event() else {
+            panic!("join game must be forwarded");
+        };
+        assert_eq!(info.entity_id, 42);
+        assert_eq!(info.dimension, -1);
+        assert_eq!(info.level_type, "flat");
+    }
+
+    #[test]
+    fn a_second_join_game_after_a_proxy_switch_resends_the_entry_packets() {
+        let mut session = PlaySession::new(PlayOptions::default());
+        let first: Vec<_> = react(&mut session, join_game())
+            .replies()
+            .cloned()
+            .collect();
+        let second = react(&mut session, join_game());
+        let replies: Vec<_> = second.replies().cloned().collect();
+        assert_eq!(replies, first);
+        assert_eq!(replies.len(), 2);
+        assert!(matches!(second.into_event(), Some(PlayEvent::JoinGame(_))));
+    }
+
+    #[test]
+    fn a_placement_is_forwarded_without_an_answer() {
+        let mut session = PlaySession::new(PlayOptions::default());
+        let event = event(&mut session, position_look(0));
+        assert_eq!(
+            event,
+            PlayEvent::Placement(PlayerPlacement {
+                x: 1.5,
+                y: 70.0,
+                z: -2.5,
+                yaw: 15.0,
+                pitch: -20.0,
+                raw: None,
+            })
+        );
+    }
+
+    #[test]
+    fn relative_flags_accumulate_on_the_last_placement() {
+        let mut session = PlaySession::new(PlayOptions::default());
+        session.placement = Some(PlayerPlacement {
+            x: 10.0,
+            y: 64.0,
+            z: -5.0,
+            yaw: 90.0,
+            pitch: 10.0,
+            ..PlayerPlacement::default()
+        });
+        // X, Z and yaw are deltas; Y and pitch stay absolute.
+        let PlayEvent::Placement(placement) =
+            event(&mut session, position_look(0x01 | 0x04 | 0x08))
+        else {
+            panic!("placement expected");
+        };
+        assert_eq!(placement.x, 11.5);
+        assert_eq!(placement.y, 70.0);
+        assert_eq!(placement.z, -7.5);
+        assert_eq!(placement.yaw, 105.0);
+        assert_eq!(placement.pitch, -20.0);
+
+        // The resolved placement becomes the base of the next relative one.
+        let PlayEvent::Placement(next) = event(&mut session, position_look(0x02 | 0x10)) else {
+            panic!("placement expected");
+        };
+        assert_eq!(next.x, 1.5);
+        assert_eq!(next.y, 140.0);
+        assert_eq!(next.pitch, -40.0);
+    }
+
+    #[test]
+    fn every_consumed_packet_becomes_its_event() {
+        let mut session = PlaySession::new(PlayOptions::default());
+        let time = TimeUpdate {
+            world_age: 72_770,
+            time_of_day: -6_000,
+        };
+        let health = UpdateHealth {
+            health: 15.0,
+            food: 18,
+            saturation: 2.5,
+        };
+        let respawn = Respawn {
+            dimension: -1,
+            difficulty: 0,
+            game_mode: 0,
+            world_type: "default".to_string(),
+        };
+        let teleport = EntityTeleport {
+            entity_id: 9,
+            x: 32,
+            y: 64,
+            z: -32,
+            yaw: 0,
+            pitch: 0,
+            on_ground: true,
+        };
+        let equipment = EntityEquipment {
+            entity_id: 9,
+            slot: 4,
+            item: ItemStack::EMPTY,
+        };
+        let spawn = SpawnPosition { x: 1, y: 64, z: -1 };
+        let experience = SetExperience {
+            experience: 0.5,
+            level: 3,
+            total: 40,
+        };
+        let block = BlockChange {
+            packed_position: 0x40_0000_0123,
+            block_state: 16,
+        };
+        let cases = vec![
+            (
+                PlayClientbound::Chat(clientbound::Chat {
+                    json: r#"{"text":"hi"}"#.to_string(),
+                    position: 0,
+                }),
+                PlayEvent::Chat(r#"{"text":"hi"}"#.to_string()),
+            ),
+            (
+                PlayClientbound::TimeUpdate(time),
+                PlayEvent::TimeUpdate(time),
+            ),
+            (
+                PlayClientbound::UpdateHealth(health),
+                PlayEvent::UpdateHealth(health),
+            ),
+            (
+                PlayClientbound::HeldItemChange(clientbound::HeldItemChange { slot: 3 }),
+                PlayEvent::HeldItemChange(3),
+            ),
+            (
+                PlayClientbound::Respawn(respawn.clone()),
+                PlayEvent::Respawn(respawn),
+            ),
+            (
+                PlayClientbound::EntityTeleport(teleport),
+                PlayEvent::EntityTeleport(teleport),
+            ),
+            (
+                PlayClientbound::EntityEquipment(equipment.clone()),
+                PlayEvent::EntityEquipment(equipment),
+            ),
+            (
+                PlayClientbound::SpawnPosition(spawn),
+                PlayEvent::SpawnPosition(spawn),
+            ),
+            (
+                PlayClientbound::SetExperience(experience),
+                PlayEvent::SetExperience(experience),
+            ),
+            (
+                PlayClientbound::BlockChange(block),
+                PlayEvent::BlockChange(block),
+            ),
+        ];
+        for (packet, expected) in cases {
+            assert_eq!(event(&mut session, packet), expected);
+        }
+    }
+
+    #[test]
+    fn world_packets_are_boxed_into_their_events() {
+        let mut session = PlaySession::new(PlayOptions::default());
+        let chunk = ChunkData {
+            chunk_x: 3,
+            chunk_z: -4,
+            ground_up: true,
+            primary_bit_mask: 0,
+            data: vec![0; 256],
+        };
+        assert_eq!(
+            event(&mut session, PlayClientbound::ChunkData(chunk.clone())),
+            PlayEvent::ChunkData(Box::new(chunk))
+        );
+        let changes = MultiBlockChange {
+            chunk_x: 0,
+            chunk_z: 0,
+            records: Vec::new(),
+        };
+        assert_eq!(
+            event(
+                &mut session,
+                PlayClientbound::MultiBlockChange(changes.clone())
+            ),
+            PlayEvent::MultiBlockChange(changes)
+        );
+    }
+
+    #[test]
+    fn a_disconnect_carries_the_readable_reason() {
+        let mut session = PlaySession::new(PlayOptions::default());
+        let reaction = react(
+            &mut session,
+            PlayClientbound::Disconnect(clientbound::Disconnect {
+                reason: r#"{"text":"session over"}"#.to_string(),
+            }),
+        );
+        assert_eq!(reaction.kick_reason(), Some("session over"));
+        assert_eq!(reaction.replies().count(), 0);
+        assert_eq!(reaction.into_event(), None);
+    }
+
+    #[test]
+    fn open_window_becomes_its_event() {
+        let mut session = PlaySession::new(PlayOptions::default());
+        let packet = clientbound::OpenWindow {
+            window_id: 1,
+            window_type: "minecraft:chest".to_string(),
+            title: r#"{"text":"Chest"}"#.to_string(),
+            slot_count: 27,
+            entity_id: None,
+        };
+        let ev = event(&mut session, PlayClientbound::OpenWindow(packet.clone()));
+        assert_eq!(ev, PlayEvent::OpenWindow(packet));
+    }
+
+    #[test]
+    fn close_window_carries_the_window_id() {
+        let mut session = PlaySession::new(PlayOptions::default());
+        let ev = event(
+            &mut session,
+            PlayClientbound::CloseWindow(clientbound::CloseWindow { window_id: 3 }),
+        );
+        assert_eq!(ev, PlayEvent::CloseWindow { window_id: 3 });
+    }
+
+    #[test]
+    fn set_slot_becomes_its_event() {
+        let mut session = PlaySession::new(PlayOptions::default());
+        let packet = clientbound::SetSlot {
+            window_id: 0,
+            slot: 36,
+            item: ItemStack {
+                item_id: 276,
+                stack_size: 1,
+                damage: 0,
+                nbt: None,
+            },
+        };
+        let ev = event(&mut session, PlayClientbound::SetSlot(packet.clone()));
+        assert_eq!(ev, PlayEvent::SetSlot(packet));
+    }
+
+    #[test]
+    fn window_items_becomes_its_event() {
+        let mut session = PlaySession::new(PlayOptions::default());
+        let packet = clientbound::WindowItems {
+            window_id: 0,
+            items: vec![ItemStack::EMPTY; 45],
+        };
+        let ev = event(&mut session, PlayClientbound::WindowItems(packet.clone()));
+        assert_eq!(ev, PlayEvent::WindowItems(packet));
+    }
+
+    #[test]
+    fn window_property_becomes_its_event() {
+        let mut session = PlaySession::new(PlayOptions::default());
+        let packet = clientbound::WindowProperty {
+            window_id: 1,
+            property: 0,
+            value: 200,
+        };
+        let ev = event(&mut session, PlayClientbound::WindowProperty(packet));
+        assert_eq!(ev, PlayEvent::WindowProperty(packet));
+    }
+
+    #[test]
+    fn an_accepted_transaction_is_forwarded_without_a_reply() {
+        let mut session = PlaySession::new(PlayOptions::default());
+        let packet = clientbound::ConfirmTransaction {
+            window_id: 0,
+            action_number: 1,
+            accepted: true,
+        };
+        let ev = event(&mut session, PlayClientbound::ConfirmTransaction(packet));
+        assert_eq!(ev, PlayEvent::ConfirmTransaction(packet));
+    }
+
+    #[test]
+    fn a_rejected_transaction_is_forwarded_and_left_to_the_game_thread() {
+        let mut session = PlaySession::new(PlayOptions::default());
+        let packet = clientbound::ConfirmTransaction {
+            window_id: 0,
+            action_number: 5,
+            accepted: false,
+        };
+        let ev = event(&mut session, PlayClientbound::ConfirmTransaction(packet));
+        assert_eq!(ev, PlayEvent::ConfirmTransaction(packet));
+    }
+
+    #[test]
+    fn an_id_outside_protocol_47_produces_an_empty_reaction() {
+        let mut session = PlaySession::new(PlayOptions::default());
+        // 0x4A is past the last 1.8 clientbound id; its body is not read.
+        let reaction = session.handle(0x4A, &[0xFF]).expect("skipped, not failed");
+        assert_eq!(reaction, Reaction::default());
+    }
+
+    #[test]
+    fn the_formerly_dropped_world_packets_are_forwarded() {
+        // Regression: 0x24, 0x25 and 0x2B were decoded by the protocol crate
+        // but skipped by the session (docs/roadmap-review.md §3.1).
+        let mut session = PlaySession::new(PlayOptions::default());
+        let action = clientbound::BlockAction {
+            x: 1,
+            y: 2,
+            z: 3,
+            instrument: 1,
+            pitch: 1,
+            block_id: 54,
+        };
+        assert_eq!(
+            event(&mut session, PlayClientbound::BlockAction(action)),
+            PlayEvent::BlockAction(action)
+        );
+        let rain = clientbound::ChangeGameState {
+            reason: 1,
+            value: 0.0,
+        };
+        assert_eq!(
+            event(&mut session, PlayClientbound::ChangeGameState(rain)),
+            PlayEvent::ChangeGameState(rain)
+        );
+    }
+
+    #[test]
+    fn a_play_set_compression_carries_the_threshold_and_no_event() {
+        let mut session = PlaySession::new(PlayOptions::default());
+        let reaction = react(
+            &mut session,
+            PlayClientbound::SetCompression(clientbound::SetCompression { threshold: 256 }),
+        );
+        assert_eq!(reaction.compression_threshold(), Some(256));
+        assert_eq!(reaction.replies().count(), 0);
+        assert_eq!(reaction.into_event(), None);
+    }
+
+    #[test]
+    fn a_resource_pack_offer_is_declined_and_forwarded_when_disabled() {
+        let mut session = PlaySession::new(PlayOptions {
+            decline_server_packs: true,
+            ..PlayOptions::default()
+        });
+        let offer = clientbound::ResourcePackSend {
+            url: "http://example.invalid/pack.zip".to_string(),
+            hash: "0123456789abcdef0123456789abcdef01234567".to_string(),
+        };
+        let reaction = react(
+            &mut session,
+            PlayClientbound::ResourcePackSend(offer.clone()),
+        );
+        let replies: Vec<_> = reaction.replies().cloned().collect();
+        assert_eq!(
+            replies,
+            [PlayServerbound::ResourcePackStatus(ResourcePackStatus {
+                hash: offer.hash.clone(),
+                result: ResourcePackResult::Declined,
+            })]
+        );
+        assert_eq!(
+            reaction.into_event(),
+            Some(PlayEvent::ResourcePackSend(offer))
+        );
+    }
+
+    #[test]
+    fn a_resource_pack_offer_is_only_forwarded_when_packs_are_allowed() {
+        let mut session = PlaySession::new(PlayOptions::default());
+        let offer = clientbound::ResourcePackSend {
+            url: "https://example.invalid/pack.zip".to_string(),
+            hash: String::new(),
+        };
+        let reaction = react(
+            &mut session,
+            PlayClientbound::ResourcePackSend(offer.clone()),
+        );
+        assert_eq!(reaction.replies().count(), 0);
+        assert_eq!(
+            reaction.into_event(),
+            Some(PlayEvent::ResourcePackSend(offer))
+        );
+    }
+
+    #[test]
+    fn large_packets_are_boxed_to_keep_the_inbox_small() {
+        assert!(std::mem::size_of::<PlayEvent>() <= 72);
+    }
+
+    #[test]
+    fn a_malformed_body_of_a_handled_id_is_an_error() {
+        let mut session = PlaySession::new(PlayOptions::default());
+        let time = body(&TimeUpdate {
+            world_age: 1,
+            time_of_day: 2,
+        });
+        let result = session.handle(TimeUpdate::ID, &time[..4]);
+        assert!(matches!(result, Err(NetError::Protocol(_))), "{result:?}");
+    }
+
+    #[test]
+    fn the_acknowledgement_repeats_the_placement() {
+        let placement = PlayerPlacement {
+            x: 0.5,
+            y: 64.0,
+            z: -0.5,
+            yaw: 90.0,
+            pitch: 0.0,
+            ..PlayerPlacement::default()
+        };
+        let PlayServerbound::PositionLook(answer) = placement.acknowledgement(true) else {
+            panic!("the acknowledgement is a position-and-look packet");
+        };
+        assert_eq!((answer.x, answer.y, answer.z), (0.5, 64.0, -0.5));
+        assert_eq!(
+            (answer.yaw, answer.pitch, answer.on_ground),
+            (90.0, 0.0, true)
+        );
+    }
+}

@@ -1,0 +1,115 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! # cindral-assets
+//!
+//! The **transport** half of the asset pipeline (spec AST-1, AST-2, AST-3):
+//! it resolves a game version to the official endpoints, downloads the
+//! assets, verifies every byte against the SHA-1 the official metadata
+//! promises, and keeps the result in a local cache.
+//!
+//! ```text
+//! version manifest ──▶ version json ──▶ asset index ──▶ asset objects
+//!                                        └──────────▶ client jar
+//! ```
+//!
+//! Legal boundary (spec §3): nothing this crate downloads may ever end up in
+//! the repository or in a release. The crate writes **only** into the
+//! platform data directory, and the CI job `assets-guard` fails the build if
+//! a Mojang asset is committed. Cindral never mirrors or re-hosts the
+//! assets; the user downloads them from Mojang's official endpoints, or
+//! points the client at an existing official installation, which is only ever
+//! read (AST-2).
+//!
+//! The crate also owns the **client resources** half of M5: it reads the
+//! blockstates, block models and block/item textures out of the verified
+//! client jar in one archive pass, exposes them through
+//! [`cindral_model::ResourceSource`], and builds the deterministic
+//! [`BlockAtlas`] that the renderer uploads as a texture array. The jar is
+//! never copied into the repository; it is only read from the local install or
+//! the verified cache.
+//!
+//! What is **not** in this crate: the block model parser (it lives in
+//! `cindral-model`), resource pack support, and the player skins. Those are
+//! later milestones (spec AST-5 to AST-9).
+//!
+//! # Example
+//!
+//! ```no_run
+//! use cindral_assets::cache::AssetCache;
+//! use cindral_assets::http::{Endpoints, HttpClient};
+//! use cindral_assets::manifest::VersionManifest;
+//! use cindral_assets::objects::{AssetIndex, Downloader, FetchMode};
+//! use cindral_assets::progress::Progress;
+//! use std::sync::Arc;
+//!
+//! # async fn run() -> Result<(), cindral_assets::AssetsError> {
+//! let client = HttpClient::new(Endpoints::official())?;
+//! let manifest = VersionManifest::parse(&client.get_bytes(client.endpoints().manifest_url()).await?)?;
+//! let version = manifest.resolve(&client, "1.8.8").await?;
+//!
+//! let cache = AssetCache::in_data_dir()?;
+//! let index = AssetIndex::fetch(&client, version.require_asset_index()?).await?;
+//!
+//! let progress = Progress::new();
+//! let downloader = Downloader::new(client, 8);
+//! let report = downloader
+//!     .fetch(&index, Arc::new(cache), FetchMode::Download, &progress)
+//!     .await?;
+//! println!("{} objects, {} downloaded", report.objects_total, report.downloaded);
+//! # Ok(())
+//! # }
+//! ```
+
+pub mod animation;
+pub mod atlas;
+pub mod cache;
+pub mod client_jar;
+pub mod client_pack;
+pub mod client_resources;
+pub mod colormap;
+pub mod dial;
+pub mod error;
+pub mod gui_atlas;
+pub mod hash;
+pub mod http;
+pub mod install;
+pub mod languages;
+pub mod manifest;
+pub mod objects;
+pub mod pack_discovery;
+pub mod panorama;
+pub mod profile_textures;
+pub mod progress;
+pub mod resource_pack;
+pub mod server_pack;
+pub mod setup;
+pub mod skin;
+pub mod sound_assets;
+
+mod zip;
+
+pub use animation::TextureAnimation;
+pub use atlas::{BlockAtlas, HiresLayer};
+pub use client_resources::{ClientResources, GlintTexture, ACHIEVEMENT_TILES};
+pub use colormap::{BiomeColormaps, Colormap};
+pub use dial::{DialKind, DialSprite};
+pub use error::{AssetsError, AssetsResult};
+pub use gui_atlas::{DynamicImage, GuiAtlas, GuiRegion, DYNAMIC_PREFIX};
+pub use progress::{Progress, ProgressSnapshot};
+pub use resource_pack::{PackMetadata, ResourcePack, ResourceStack};
+pub use setup::{find_existing_jar, run_setup, SetupStep, TARGET_VERSION};
+pub use skin::{
+    convert_64x32_to_64x64, decode_png_bytes, procedural_bat_texture, procedural_blaze_texture,
+    procedural_cave_spider_texture, procedural_chicken_texture, procedural_cow_texture,
+    procedural_creeper_texture, procedural_dragon_texture, procedural_enderman_texture,
+    procedural_endermite_texture, procedural_fallback_skin, procedural_ghast_texture,
+    procedural_guardian_texture, procedural_horse_texture, procedural_iron_golem_texture,
+    procedural_magma_cube_texture, procedural_mooshroom_texture, procedural_ocelot_texture,
+    procedural_pig_texture, procedural_rabbit_texture, procedural_sheep_fur_texture,
+    procedural_sheep_texture, procedural_silverfish_texture, procedural_skeleton_texture,
+    procedural_slime_texture, procedural_snowman_texture, procedural_spider_texture,
+    procedural_squid_texture, procedural_villager_texture, procedural_witch_texture,
+    procedural_wither_texture, procedural_wolf_texture, procedural_zombie_pigman_texture,
+    procedural_zombie_skin, procedural_zombie_villager_texture, SkinModel,
+};
+pub use sound_assets::SoundAssets;

@@ -1,0 +1,24 @@
+[package]
+name = "cindral-mesh"
+description = "Cindral CPU meshing: naive face-culling chunk mesher and snapshot-based block access."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+bytemuck.workspace = true
+glam = "0.34"
+cindral-model.workspace = true
+cindral-world.workspace = true
+
+[dev-dependencies]
+criterion = "0.8"
+
+[[bench]]
+name = "mesh"
+harness = false
+
+[lints]
+workspace = true

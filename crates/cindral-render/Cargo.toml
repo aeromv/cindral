@@ -1,0 +1,31 @@
+[package]
+name = "cindral-render"
+description = "Cindral renderer: wgpu window/offscreen targets, terrain pipeline, fallback textures, and debug overlay."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+bytemuck.workspace = true
+glam = "0.34"
+pollster = "1"
+thiserror.workspace = true
+cindral-core.workspace = true
+cindral-game.workspace = true
+cindral-mesh.workspace = true
+cindral-ui.workspace = true
+cindral-world.workspace = true
+wgpu = "30.0.1"
+winit = "0.30.8"
+
+[dev-dependencies]
+naga = { version = "30.0.1", features = ["wgsl-in"] }
+
+[features]
+# Forwards to `cindral-core/profiling`: puffin CPU spans.
+profiling = ["cindral-core/profiling"]
+
+[lints]
+workspace = true
