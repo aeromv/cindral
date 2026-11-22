@@ -276,12 +276,22 @@ pub fn data_dir() -> Option<PathBuf> {
 /// * Linux and the other Unix systems: `$XDG_DATA_HOME`, falling back to
 ///   `~/.local/share` (XDG base directory specification);
 /// * macOS: `~/Library/Application Support`;
-/// * Windows: `%APPDATA%` (the roaming application data folder).
+/// * Windows: `%APPDATA%` (the roaming application data folder), or
+///   `%USERPROFILE%\AppData\Roaming` when a launcher or a terminal started
+///   the game without `APPDATA`, or with one that does not exist.
 fn platform_data_dir() -> Option<PathBuf> {
     if cfg!(target_os = "windows") {
-        return std::env::var_os("APPDATA")
+        let appdata = std::env::var_os("APPDATA")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from);
+        let profile = std::env::var_os("USERPROFILE")
+            .filter(|value| !value.is_empty())
+            .map(|home| PathBuf::from(home).join("AppData").join("Roaming"));
+        return match (appdata, profile) {
+            (Some(appdata), _) if appdata.is_dir() => Some(appdata),
+            (_, Some(profile)) if profile.is_dir() => Some(profile),
+            (appdata, profile) => appdata.or(profile),
+        };
     }
 
     let home = std::env::var_os("HOME")

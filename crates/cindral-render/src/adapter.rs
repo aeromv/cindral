@@ -73,6 +73,26 @@ impl AdapterSummary {
     }
 }
 
+/// The graphics adapter the window will use, found without opening a window:
+/// the first start picks its video preset from it. Direct3D 12 on Windows,
+/// as the window; `None` when no adapter answers.
+#[must_use]
+pub fn probe_adapter() -> Option<AdapterSummary> {
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    if cfg!(windows) {
+        descriptor.backends = wgpu::Backends::DX12;
+    }
+    let instance = wgpu::Instance::new(descriptor.with_env());
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        force_fallback_adapter: false,
+        compatible_surface: None,
+        apply_limit_buckets: false,
+    }))
+    .ok()?;
+    Some(AdapterSummary::of(&adapter))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

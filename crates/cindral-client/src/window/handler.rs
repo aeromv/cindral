@@ -33,6 +33,10 @@ impl ApplicationHandler for App {
             .then_some(Fullscreen::Borderless(None));
         let attributes = Window::default_attributes()
             .with_title("Cindral")
+            .with_window_icon(window_icon())
+            // Shown by the first drawn frame (the splash), so the GPU start
+            // never shows as a black window.
+            .with_visible(false)
             .with_fullscreen(fullscreen_mode)
             .with_inner_size(LogicalSize::new(
                 f64::from(self.args.width),
@@ -105,6 +109,10 @@ impl ApplicationHandler for App {
             }
         }
         self.assets.brand_atlas = ui_font::install_brand(&mut renderer);
+        // The brand art (the logo of the splash) before the game files load.
+        let brand_only = crate::resources::official::grow_atlas(None, &[]);
+        super::startup::upload_gui_atlas(&mut renderer, Some(&brand_only));
+        self.assets.gui_atlas = Some(brand_only);
 
         // Minimal procedural fallback setup & sky textures for instant responsive frame
         renderer.use_procedural_blocks();
@@ -263,9 +271,14 @@ impl ApplicationHandler for App {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.discord
             .show(Status::of(self.screen(), self.session.is_some()));
+        self.poll_first_run();
         let now = Instant::now();
         if now + Duration::from_micros(500) >= self.clock.next_frame {
-            if let Some(window) = &self.window {
+            if !self.window_shown && self.window.is_some() {
+                // A hidden window gets no paint message on Windows: the first
+                // frame is drawn from here, and it shows the window.
+                self.redraw(event_loop);
+            } else if let Some(window) = &self.window {
                 window.request_redraw();
             }
             event_loop.set_control_flow(ControlFlow::Poll);
@@ -273,4 +286,16 @@ impl ApplicationHandler for App {
             event_loop.set_control_flow(ControlFlow::WaitUntil(self.clock.next_frame));
         }
     }
+}
+
+/// The Cindral logo in the title bar and the taskbar.
+fn window_icon() -> Option<winit::window::Icon> {
+    const PNG: &[u8] = include_bytes!("../../../../packaging/windows/window-icon.png");
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(PNG));
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::ALPHA);
+    let mut reader = decoder.read_info().ok()?;
+    let mut rgba = vec![0; reader.output_buffer_size()?];
+    let frame = reader.next_frame(&mut rgba).ok()?;
+    rgba.truncate(frame.buffer_size());
+    winit::window::Icon::from_rgba(rgba, frame.width, frame.height).ok()
 }

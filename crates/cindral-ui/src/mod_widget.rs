@@ -55,6 +55,8 @@ pub struct WidgetStyle {
     pub radius: f32,
     /// The margin between the panel edge and the text, in GUI units.
     pub padding: f32,
+    /// The outline around the panel (straight-alpha RGBA), or `None`.
+    pub border: Option<Color>,
     /// The shadow of the text.
     pub shadow: ShadowStyle,
 }
@@ -66,6 +68,7 @@ impl Default for WidgetStyle {
             background: Some(PANEL),
             radius: 2.0,
             padding: 2.0,
+            border: None,
             shadow: ShadowStyle::Vanilla,
         }
     }
@@ -356,7 +359,13 @@ fn draw_widget(list: &mut DrawList, widget: &ModWidgetView, sf: f32, font: &Font
     let [x, y] = widget.position;
     if let Some(background) = style.background.filter(|colour| colour[3] > 0.0) {
         let panel = Rect::new(x * sf, y * sf, width * sf, height * sf);
-        fill(list, panel, style.radius * widget.scale * sf, background);
+        let radius = style.radius * widget.scale * sf;
+        fill(list, panel, radius, background);
+        if let Some(border) = style.border.filter(|colour| colour[3] > 0.0) {
+            // Half a GUI unit, never under a pixel.
+            let line = (0.5 * widget.scale * sf).max(1.0);
+            list.rounded_ring(panel, radius, line, border);
+        }
     }
     let unit = widget.scale * sf;
     let origin = Origin {

@@ -21,6 +21,7 @@ mod chat;
 mod controls;
 mod keys;
 mod language;
+pub mod machine;
 mod menu;
 mod mods;
 mod multiplayer;

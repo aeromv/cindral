@@ -324,6 +324,7 @@ fn is_menu_view(view: &str) -> bool {
         view,
         "title"
             | "title-modern"
+            | "loading"
             | "servers"
             | "server-edit"
             | "connecting"
@@ -367,6 +368,7 @@ fn menu_scene(
     }
     let screen = match view {
         "title" | "title-modern" => Screen::Title,
+        "loading" => Screen::Loading,
         "server-edit" => Screen::ServerEdit,
         "connecting" => Screen::Connecting,
         "disconnected" => Screen::Disconnected,

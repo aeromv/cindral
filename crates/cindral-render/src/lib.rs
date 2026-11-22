@@ -51,7 +51,7 @@ mod texture;
 mod ui_pass;
 mod weather;
 
-pub use adapter::{AdapterKind, AdapterSummary};
+pub use adapter::{probe_adapter, AdapterKind, AdapterSummary};
 pub use block_atlas::BlockAtlasError;
 pub use border::{BorderStatus, BorderView};
 pub use camera::{Camera, Frustum};

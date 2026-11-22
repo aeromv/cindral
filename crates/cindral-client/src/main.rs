@@ -4,6 +4,11 @@
 //! screenshot, the headless scripted session, the server-less UI demo or the
 //! server-less M5 block demo.
 
+// A release build is a windowed app: opened from Explorer or a shortcut it
+// shows no console. Run from a terminal, it writes to that terminal
+// (`attach_parent_console`).
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use std::process::ExitCode;
 
 use cindral_client::args::{Args, Mode, USAGE};
@@ -16,6 +21,7 @@ static ALLOCATOR: cindral_core::profiling::CountingAllocator =
     cindral_core::profiling::CountingAllocator::new();
 
 fn main() -> ExitCode {
+    attach_parent_console();
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
@@ -70,3 +76,23 @@ fn main() -> ExitCode {
         }
     }
 }
+
+/// Writes the output of a release build to the terminal it was started from,
+/// if any: a windowed app has no console of its own. Output already sent to a
+/// pipe or a file stays there.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn attach_parent_console() {
+    use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+    if cfg!(debug_assertions) {
+        return;
+    }
+    // SAFETY: a plain Win32 call without pointers; it fails harmlessly when
+    // the parent has no console or this process already has one.
+    unsafe {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
+#[cfg(not(windows))]
+fn attach_parent_console() {}

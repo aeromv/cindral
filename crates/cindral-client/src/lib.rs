@@ -31,6 +31,7 @@ pub mod args;
 pub mod audio_bridge;
 pub(crate) mod discord;
 pub mod error;
+pub mod first_run;
 pub mod game;
 pub mod headless;
 pub mod input;

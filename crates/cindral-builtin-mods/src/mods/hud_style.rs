@@ -29,7 +29,7 @@ pub(crate) const BACKGROUND_OPACITY: SettingDef = SettingDef {
         min: 0.0,
         max: 1.0,
         step: 0.05,
-        default: 0.35,
+        default: 0.4,
     },
 };
 pub(crate) const CORNER_RADIUS: SettingDef = SettingDef {
@@ -37,9 +37,9 @@ pub(crate) const CORNER_RADIUS: SettingDef = SettingDef {
     label_key: "cindral.mods.hud.corner_radius",
     kind: SettingKind::Slider {
         min: 0.0,
-        max: 6.0,
+        max: 10.0,
         step: 0.5,
-        default: 2.0,
+        default: 3.0,
     },
 };
 pub(crate) const PADDING: SettingDef = SettingDef {
@@ -49,7 +49,35 @@ pub(crate) const PADDING: SettingDef = SettingDef {
         min: 0.0,
         max: 8.0,
         step: 0.5,
-        default: 2.0,
+        default: 3.0,
+    },
+};
+/// A thin outline around the background, on by default: it lifts the panel
+/// off a bright sky or snow.
+pub(crate) const BORDER: SettingDef = SettingDef {
+    key: "border",
+    label_key: "cindral.mods.hud.border",
+    kind: SettingKind::Toggle { default: true },
+};
+/// The outline of the widgets of icons, off like their background.
+pub(crate) const BORDER_BARE: SettingDef = SettingDef {
+    key: "border",
+    label_key: "cindral.mods.hud.border",
+    kind: SettingKind::Toggle { default: false },
+};
+pub(crate) const BORDER_COLOR: SettingDef = SettingDef {
+    key: "border_color",
+    label_key: "cindral.mods.hud.border_color",
+    kind: SettingKind::Color { default: "#ffffff" },
+};
+pub(crate) const BORDER_OPACITY: SettingDef = SettingDef {
+    key: "border_opacity",
+    label_key: "cindral.mods.hud.border_opacity",
+    kind: SettingKind::Slider {
+        min: 0.0,
+        max: 1.0,
+        step: 0.05,
+        default: 0.15,
     },
 };
 pub(crate) const SHADOW: SettingDef = SettingDef {
@@ -68,12 +96,15 @@ pub(crate) const SHADOW_COLOR: SettingDef = SettingDef {
 
 /// The keys of the shared options, for the tests of the mods.
 #[cfg(test)]
-pub(crate) const KEYS: [&str; 7] = [
+pub(crate) const KEYS: [&str; 10] = [
     "background",
     "background_color",
     "background_opacity",
     "corner_radius",
     "padding",
+    "border",
+    "border_color",
+    "border_opacity",
     "shadow",
     "shadow_color",
 ];
@@ -88,6 +119,9 @@ macro_rules! hud_settings {
             $crate::mods::hud_style::BACKGROUND_OPACITY,
             $crate::mods::hud_style::CORNER_RADIUS,
             $crate::mods::hud_style::PADDING,
+            $crate::mods::hud_style::BORDER,
+            $crate::mods::hud_style::BORDER_COLOR,
+            $crate::mods::hud_style::BORDER_OPACITY,
             $crate::mods::hud_style::SHADOW,
             $crate::mods::hud_style::SHADOW_COLOR,
         ]
@@ -105,6 +139,9 @@ macro_rules! hud_settings_bare {
             $crate::mods::hud_style::BACKGROUND_OPACITY,
             $crate::mods::hud_style::CORNER_RADIUS,
             $crate::mods::hud_style::PADDING,
+            $crate::mods::hud_style::BORDER_BARE,
+            $crate::mods::hud_style::BORDER_COLOR,
+            $crate::mods::hud_style::BORDER_OPACITY,
             $crate::mods::hud_style::SHADOW,
             $crate::mods::hud_style::SHADOW_COLOR,
         ]

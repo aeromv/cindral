@@ -139,6 +139,7 @@ impl App {
         let config = network_config(&self.args, &self.options, address, pack_mode, identity);
         match Session::start(config) {
             Ok(session) => {
+                self.discord.set_server(&address.host);
                 self.server_pack.set_mode(pack_mode);
                 self.session = Some(session);
                 self.send_particle_setting();

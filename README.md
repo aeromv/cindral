@@ -25,7 +25,7 @@ client does.
 Measured on a Pentium Gold G5400 with Intel UHD 610 graphics, the kind of PC
 most clients are not tested on, with a 32x PvP pack enabled:
 
-| | Cindral 0.2 |
+| | Cindral 0.3 |
 |---|---|
 | Window on screen | 0.4 s |
 | Textures and resource pack ready | 1.0 to 1.5 s |
@@ -42,7 +42,8 @@ See the [list](#mods).
 
 **A HUD you arrange yourself.** Drag any widget, resize it, pin it to a
 corner or an edge, snap it to the grid, lock it in place. Each widget has its
-own colours, background, opacity, corner radius, padding and text shadow.
+own colours, background, outline, opacity, corner radius, padding and text
+shadow.
 Undo and redo work across the editor, and three layouts are built in
 (Default, PvP, Minimal) next to your own.
 
@@ -51,13 +52,15 @@ OptiFine and MCPatcher features they rely on: connected textures, custom
 items, custom skies, custom colours, random and custom mob models, custom
 GUIs and fonts, and texture animations.
 
-**Settings that matter for PvP.** Video presets, OptiFine-style quality and
+**Settings that matter for PvP.** The first start sets the video options
+for your PC by itself. Video presets, OptiFine-style quality and
 performance pages, Dynamic Lights, Smart Animations, a lagometer, per-type
 particle switches, and three interface themes (Ember, Amethyst, and Vanilla,
 which follows your pack's buttons).
 
 **Accounts.** Microsoft accounts with a switcher, offline mode, and sessions
-passed in by a launcher. Discord Rich Presence shows where you are playing.
+passed in by a launcher. Discord Rich Presence shows the server you play on
+and for how long, with a button that leads your friends to Cindral.
 
 <table>
   <tr>
@@ -80,29 +83,32 @@ passed in by a launcher. Discord Rich Presence shows where you are playing.
 
 ## Install
 
-1. Download `cindral.exe` from the
-   [latest release](https://github.com/aeromv/cindral/releases/latest), or
-   [build it](#building).
-2. Get the Minecraft 1.8.8 game files once. Cindral downloads them from
-   Mojang and checks them against Mojang's SHA-1 hashes (about 110 MB); no
-   game files are shipped with it:
-   ```sh
-   cindral --setup-assets
-   ```
-3. Run `cindral`. Add your server under **Play**, or join directly:
-   ```sh
-   cindral play.example.net 25565
-   ```
+**Windows.** Download `cindral-setup-<version>.exe` from the
+[latest release](https://github.com/aeromv/cindral/releases/latest) and run
+it. It needs no administrator rights, adds Start menu and desktop
+shortcuts, and fetches the Minecraft 1.8.8 game files and sounds from Mojang
+(about 110 MB, each file checked against Mojang's SHA-1). No Mojang file is
+shipped with Cindral. To update, run the new installer over the old one.
 
-On Windows, keep `dxcompiler.dll` next to `cindral.exe` when the release
-includes it: shaders then compile with the DirectX Shader Compiler and the
-first frame comes about a second sooner.
+**Portable.** `cindral.exe` from the same release also runs on its own. On
+the first launch it downloads the game files in the background and shows
+the progress on the title screen. Keep `dxcompiler.dll` next to it: shaders
+then compile with the DirectX Shader Compiler and the first frame comes
+about a second sooner.
+
+**From a terminal**, the files can be fetched ahead of time, and a server
+joined directly:
+
+```sh
+cindral --setup-assets
+cindral play.example.net 25565
+```
 
 ### Useful options
 
 | Option | What it does |
 |---|---|
-| `--preset pvp` | Render distance 4, no frame cap, light effects. Also `low`, `medium`, `high`. |
+| `--preset pvp` | Render distance 4, no frame cap, light effects. Also `low`, `medium`, `high`. Without it, the first start picks one for your PC. |
 | `--resource-pack PATH` | Load a pack for this run, on top of the ones you enabled. |
 | `--username`, `--uuid`, `--accessToken` | Use a session from a launcher. |
 | `--backend dx12` or `vulkan` | Pick the graphics API. Windows uses Direct3D 12 by default. |

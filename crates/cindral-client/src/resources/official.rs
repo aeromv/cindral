@@ -82,7 +82,10 @@ fn locate_verified_jar() -> Result<ClientJar, AssetsError> {
 
     Err(AssetsError::Missing {
         what: format!("client jar of version {VERSION_ID}"),
-        path: "official installation or cindral asset cache".to_string(),
+        path: cindral_assets::cache::data_dir().map_or_else(
+            || "official installation or cindral asset cache".to_string(),
+            |dir| format!("{} (run `cindral --setup-assets`)", dir.display()),
+        ),
     })
 }
 

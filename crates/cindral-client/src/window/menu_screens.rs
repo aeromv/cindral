@@ -26,7 +26,7 @@ use crate::screens::Screen;
 use crate::world_view::WorldView;
 
 /// The version line of the title screen.
-pub(super) const VERSION_LINE: &str = concat!("Cindral ", env!("CARGO_PKG_VERSION"));
+pub(super) const VERSION_LINE: &str = concat!("Cindral ", env!("CARGO_PKG_VERSION"), " by AeroMV");
 
 impl App {
     /// Hands a key to the UI of a menu screen; the screens read Escape and

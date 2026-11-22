@@ -95,6 +95,21 @@ pub fn run(args: Args) -> Result<(), ClientError> {
         .as_deref()
         .map(Options::load)
         .unwrap_or_default();
+    // The first start (no options file yet) tunes the video settings to the
+    // machine and keeps them, so the player starts on a smooth game.
+    let first_start = options_path.as_deref().is_some_and(|path| !path.exists());
+    if first_start && args.preset.is_none() {
+        options::machine::tuned_preset().apply(&mut options.video);
+        if let Some(path) = options_path.as_deref() {
+            if let Err(error) = options.save(path) {
+                tracing::warn!(%error, "could not save the tuned options");
+            }
+        }
+    }
+    // A preset named on the command line wins over the saved options.
+    if let Some(preset) = args.preset {
+        preset.apply(&mut options.video);
+    }
     // A render distance typed on the command line wins over the saved one.
     if args.view_distance != CLI_DEFAULT_VIEW_DISTANCE {
         options.video.render_distance = args.view_distance;
@@ -138,6 +153,10 @@ struct App {
     /// The audio thread and its handle; silent with `--no-audio` or without
     /// downloaded assets (P11-E).
     audio: AudioBridge,
+    /// Whether the window was made visible (after its first frame).
+    window_shown: bool,
+    /// The download of the game files on the first launch, while it runs.
+    first_run: Option<crate::first_run::FirstRun>,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     /// The uploaded title panorama, when the user's assets provide it.

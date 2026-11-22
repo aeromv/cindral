@@ -291,7 +291,7 @@ impl MenuFlow {
         let command = match screen {
             Screen::Title => self.show_title(ui, atlas, lang, context, &mut panorama),
             Screen::Loading => {
-                LoadingScreen::new().show(ui, atlas, lang);
+                LoadingScreen::new().show(ui, context.brand_font, lang);
                 None
             }
             Screen::ServerList => self.show_list(ui, atlas, lang),

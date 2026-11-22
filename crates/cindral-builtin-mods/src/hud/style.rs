@@ -26,17 +26,20 @@ pub struct HudStyle {
     pub radius: f32,
     /// The margin between the background and the text, in GUI units.
     pub padding: f32,
+    /// The outline around the background as `(0xRRGGBB, opacity)`, or `None`.
+    pub border: Option<(u32, f32)>,
     /// The shadow of the text.
     pub shadow: Shadow,
 }
 
 impl Default for HudStyle {
-    /// The look of the widgets before they had options: a black panel at 35 %.
+    /// A black panel at 40 % with soft corners and a faint white outline.
     fn default() -> Self {
         Self {
-            background: Some((0x00_0000, 0.35)),
-            radius: 2.0,
-            padding: 2.0,
+            background: Some((0x00_0000, 0.4)),
+            radius: 3.0,
+            padding: 3.0,
+            border: Some((0xFF_FFFF, 0.15)),
             shadow: Shadow::Vanilla,
         }
     }
@@ -52,6 +55,13 @@ impl HudStyle {
                 settings.number("background_opacity"),
             )
         });
+        // An outline goes with a panel: alone it would frame empty air.
+        let border = (background.is_some() && settings.bool("border")).then(|| {
+            (
+                crate::mods::parse_color(settings.text("border_color")),
+                settings.number("border_opacity"),
+            )
+        });
         let shadow = match settings.text("shadow") {
             "off" => Shadow::Off,
             "custom" => Shadow::Color(crate::mods::parse_color(settings.text("shadow_color"))),
@@ -61,6 +71,7 @@ impl HudStyle {
             background,
             radius: settings.number("corner_radius"),
             padding: settings.number("padding"),
+            border,
             shadow,
         }
     }
@@ -79,7 +90,7 @@ mod tests {
     }
 
     #[test]
-    fn the_defaults_are_the_look_the_widgets_had_before_the_options() {
+    fn the_defaults_of_the_options_are_the_default_look() {
         assert_eq!(HudStyle::from_settings(&settings()), HudStyle::default());
     }
 
@@ -91,6 +102,8 @@ mod tests {
             ("background_opacity", SettingValue::Number(0.8)),
             ("corner_radius", SettingValue::Number(4.0)),
             ("padding", SettingValue::Number(5.0)),
+            ("border_color", SettingValue::Text("#ff7329".into())),
+            ("border_opacity", SettingValue::Number(0.5)),
             ("shadow", SettingValue::Text("custom".into())),
             ("shadow_color", SettingValue::Text("#ff0000".into())),
         ] {
@@ -102,6 +115,7 @@ mod tests {
                 background: Some((0x10_2030, 0.8)),
                 radius: 4.0,
                 padding: 5.0,
+                border: Some((0xff_7329, 0.5)),
                 shadow: Shadow::Color(0xff_0000),
             }
         );
@@ -118,6 +132,7 @@ mod tests {
             .expect("known key");
         let style = HudStyle::from_settings(&settings);
         assert_eq!(style.background, None);
+        assert_eq!(style.border, None, "no outline without a panel");
         assert_eq!(style.shadow, Shadow::Off);
     }
 }

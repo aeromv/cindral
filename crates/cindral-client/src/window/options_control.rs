@@ -227,6 +227,44 @@ impl App {
         self.set_screen(self.options_menu.origin);
     }
 
+    /// Ends the first-launch download once it is over: the textures of the
+    /// fresh jar are loaded and the sounds start.
+    pub(super) fn poll_first_run(&mut self) {
+        use crate::first_run::FirstRunState;
+        let Some(state) = self
+            .first_run
+            .as_ref()
+            .map(crate::first_run::FirstRun::state)
+        else {
+            return;
+        };
+        match state {
+            FirstRunState::Running(_) => {}
+            FirstRunState::Failed => self.first_run = None,
+            FirstRunState::Done => {
+                self.first_run = None;
+                self.reload_resources();
+                if !self.audio.is_enabled() {
+                    self.audio = crate::audio_bridge::AudioBridge::start(&self.options.sound);
+                }
+            }
+        }
+    }
+
+    /// The line at the bottom left of the title screen: the version, or the
+    /// progress of the first-launch download while it runs.
+    pub(super) fn version_line(&self) -> std::borrow::Cow<'static, str> {
+        use crate::first_run::{status_line, FirstRunState};
+        match self
+            .first_run
+            .as_ref()
+            .map(crate::first_run::FirstRun::state)
+        {
+            Some(FirstRunState::Running(fraction)) => status_line(fraction).into(),
+            _ => super::menu_screens::VERSION_LINE.into(),
+        }
+    }
+
     /// Hot-reloads the active resource packs, rebinding the block atlas and
     /// re-meshing all loaded chunk columns.
     pub(super) fn reload_resources(&mut self) {

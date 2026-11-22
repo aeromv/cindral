@@ -22,6 +22,9 @@ fn widget_style(style: &HudStyle) -> WidgetStyle {
             .map(|(rgb, opacity)| [channel(rgb, 16), channel(rgb, 8), channel(rgb, 0), opacity]),
         radius: style.radius,
         padding: style.padding,
+        border: style
+            .border
+            .map(|(rgb, opacity)| [channel(rgb, 16), channel(rgb, 8), channel(rgb, 0), opacity]),
         shadow: match style.shadow {
             Shadow::Vanilla => ShadowStyle::Vanilla,
             Shadow::Color(rgb) => ShadowStyle::Color(rgb),

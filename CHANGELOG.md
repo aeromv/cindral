@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.3.0 — 22 November 2026
+
+### Install
+- A Windows installer, `cindral-setup-0.3.0.exe` (16 MB). It installs per
+  user without an administrator prompt, adds Start menu and desktop
+  shortcuts, and downloads the Minecraft 1.8.8 game files and sounds from
+  Mojang as its last step. Updating is running the new installer.
+- Without those files, the game now downloads them by itself on the first
+  launch and shows the progress on the title screen. Textures and sounds
+  switch on as soon as the download ends, with no restart.
+- The game files are found even when Cindral is started by a launcher or a
+  terminal that does not pass `APPDATA`. Before, such a start showed pink
+  and black blocks, no items, no armor and no sounds.
+- `cindral.exe` has its own icon, and it no longer opens a console window
+  next to the game. Run from a terminal, it still prints there.
+
+### Start
+- A loading screen with the Cindral logo and a moving bar replaces the black
+  window of the first second. The window opens only once it can draw it.
+- The first start tunes the video settings to the machine: the graphics
+  chip, the CPU threads and the memory pick the PvP, Medium or High preset,
+  and the choice is saved like any other setting. A Pentium with Intel UHD
+  graphics starts on the PvP preset.
+- `--preset` now applies its settings; it was read and then ignored.
+
+### Discord
+- The Rich Presence card shows the Cindral logo, the version and its author,
+  the server you play on when it has a public name (never a raw IP address),
+  the time played, and a "Get Cindral" button.
+
+### HUD
+- Widgets have rounder corners, more room around the text and a thin
+  outline that keeps them readable against a bright sky. The outline has its
+  own colour and opacity, and can be turned off per widget.
+- The title screen says "Cindral 0.3.0 by AeroMV".
+
 ## 0.2.0 — 22 November 2026
 
 ### Gameplay

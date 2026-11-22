@@ -347,6 +347,12 @@ impl App {
         };
         self.cpu.lap(Stage::Render);
         self.cpu.finish();
+        if !self.window_shown {
+            self.window_shown = true;
+            if let Some(window) = &self.window {
+                window.set_visible(true);
+            }
+        }
         let present_us = renderer.presentation_time_us();
         let captured = renderer.take_capture();
         self.record_input_latency(present_us);

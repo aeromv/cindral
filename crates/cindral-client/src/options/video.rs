@@ -238,14 +238,25 @@ pub enum VideoPreset {
 }
 
 impl VideoPreset {
-    /// The preset a first start picks for `kind`, or `None` to keep the
-    /// defaults (a graphics card, or a device that does not say).
+    /// The preset a first start picks for a machine with a GPU of `kind`,
+    /// `threads` CPU threads and `ram_gb` gigabytes of memory (`None` when
+    /// unknown). A weak machine gets the PvP preset, which keeps the frame
+    /// rate high where it matters; a strong one keeps the reference look.
     #[must_use]
-    pub fn for_adapter(kind: cindral_render::AdapterKind) -> Option<Self> {
+    pub fn for_machine(
+        kind: cindral_render::AdapterKind,
+        threads: usize,
+        ram_gb: Option<u32>,
+    ) -> Self {
+        use cindral_render::AdapterKind;
+        let weak_cpu = threads <= 4;
+        let little_ram = ram_gb.is_some_and(|gb| gb < 8);
         match kind {
-            cindral_render::AdapterKind::Software => Some(Self::Low),
-            cindral_render::AdapterKind::Integrated => Some(Self::Medium),
-            cindral_render::AdapterKind::Discrete | cindral_render::AdapterKind::Other => None,
+            AdapterKind::Software => Self::Low,
+            AdapterKind::Integrated if weak_cpu || little_ram => Self::Pvp,
+            AdapterKind::Integrated => Self::Medium,
+            AdapterKind::Discrete | AdapterKind::Other if weak_cpu || little_ram => Self::Medium,
+            AdapterKind::Discrete | AdapterKind::Other => Self::High,
         }
     }
 

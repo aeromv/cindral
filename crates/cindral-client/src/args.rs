@@ -165,8 +165,9 @@ options:
   --help, -h          print this help";
 
 /// The scenes of `--hud-demo`.
-pub const HUD_VIEWS: [&str; 30] = [
+pub const HUD_VIEWS: [&str; 31] = [
     "overview",
+    "loading",
     "tab",
     "chat",
     "menu",

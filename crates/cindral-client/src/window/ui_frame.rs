@@ -15,7 +15,6 @@ use cindral_ui::FontAtlas;
 use cindral_ui::{Rect, SlotItem, UiOutput};
 
 use super::menu_screens;
-use super::menu_screens::VERSION_LINE;
 use super::mods_menu;
 use super::{App, CARET_BLINK_MS};
 use crate::options::Action;
@@ -379,13 +378,14 @@ impl App {
                     &self.mod_icons(),
                 );
                 let inventory_key = self.options.keys.get(Action::Inventory).label(&self.lang);
+                let version_line = self.version_line();
                 let context = MenuContext {
                     stats_revision: self.world.as_ref().map_or(0, WorldView::stats_revision),
                     stats_loading: self.world.as_ref().is_some_and(WorldView::stats_loading),
                     items: ItemView::new(self.assets.items.as_deref(), self.dials.frames()),
                     inventory_key: &inventory_key,
                     player_hash: java_string_hash(&self.args.name),
-                    version: VERSION_LINE,
+                    version: &version_line,
                     connect_stage: self
                         .world
                         .as_ref()

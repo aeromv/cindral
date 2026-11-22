@@ -1,0 +1,28 @@
+// The resources of cindral.exe: its icon and the details Explorer shows.
+1 ICON "../../packaging/windows/cindral.ico"
+
+1 VERSIONINFO
+FILEVERSION 0,3,0,0
+PRODUCTVERSION 0,3,0,0
+FILEOS 0x40004
+FILETYPE 0x1
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "AeroMV"
+      VALUE "FileDescription", "Cindral"
+      VALUE "FileVersion", "0.3.0"
+      VALUE "InternalName", "cindral"
+      VALUE "LegalCopyright", "AeroMV and contributors. MIT or Apache-2.0."
+      VALUE "OriginalFilename", "cindral.exe"
+      VALUE "ProductName", "Cindral"
+      VALUE "ProductVersion", "0.3.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

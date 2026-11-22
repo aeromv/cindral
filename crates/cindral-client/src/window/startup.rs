@@ -234,6 +234,12 @@ impl App {
             unicode: None,
             source: crate::resources::ui_font::FontSource::Fallback,
         };
+        // Offline tests and scripted runs (`--no-audio`) never download.
+        let first_run = if args.no_audio {
+            None
+        } else {
+            crate::first_run::FirstRun::start_if_needed()
+        };
         let audio = if args.no_audio {
             AudioBridge::disabled()
         } else {
@@ -253,6 +259,8 @@ impl App {
                 origin: Screen::GameMenu,
             },
             discord: crate::discord::Presence::spawn(),
+            first_run,
+            window_shown: false,
             lang,
             mods: ModsRuntime::new(&options.mods),
             mods_memory: (0, None),
