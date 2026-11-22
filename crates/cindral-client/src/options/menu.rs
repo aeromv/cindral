@@ -5,6 +5,7 @@
 //! Stored as `[menu] title_style = "modern" | "classic"` in `options.toml`.
 
 use cindral_ui::menus::TitleStyle;
+use cindral_ui::ThemeId;
 use serde::{Deserialize, Serialize};
 
 /// The saved form of [`TitleStyle`]. A value this version does not know
@@ -40,12 +41,51 @@ impl From<TitleStyle> for TitleStyleSetting {
     }
 }
 
+/// The saved form of [`ThemeId`]. Ember, the Cindral look, is the default; a
+/// theme this version does not know reads as `Vanilla`, so a file written by
+/// a newer version still loads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeSetting {
+    /// Warm near-black flat controls with the ember-orange accent.
+    #[default]
+    Ember,
+    /// Beveled purple controls.
+    Amethyst,
+    // `serde(other)` must be the last variant.
+    /// The 1.8 look, textured by the resource packs.
+    #[serde(other)]
+    Vanilla,
+}
+
+impl From<ThemeSetting> for ThemeId {
+    fn from(setting: ThemeSetting) -> Self {
+        match setting {
+            ThemeSetting::Vanilla => Self::Vanilla,
+            ThemeSetting::Ember => Self::Ember,
+            ThemeSetting::Amethyst => Self::Amethyst,
+        }
+    }
+}
+
+impl From<ThemeId> for ThemeSetting {
+    fn from(id: ThemeId) -> Self {
+        match id {
+            ThemeId::Vanilla => Self::Vanilla,
+            ThemeId::Ember => Self::Ember,
+            ThemeId::Amethyst => Self::Amethyst,
+        }
+    }
+}
+
 /// The menu options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MenuOptions {
     /// The title screen the client starts with.
     pub title_style: TitleStyleSetting,
+    /// The look of buttons, sliders and menu backgrounds (ADR-0078).
+    pub theme: ThemeSetting,
 }
 
 impl MenuOptions {
@@ -53,6 +93,12 @@ impl MenuOptions {
     #[must_use]
     pub fn style(self) -> TitleStyle {
         self.title_style.into()
+    }
+
+    /// The theme the UI is painted with.
+    #[must_use]
+    pub fn theme(self) -> ThemeId {
+        self.theme.into()
     }
 
     /// Switches to the other title screen, for the toggle of the options.
@@ -78,6 +124,31 @@ mod tests {
     }
 
     #[test]
+    fn the_default_theme_is_ember() {
+        assert_eq!(MenuOptions::default().theme(), ThemeId::Ember);
+    }
+
+    #[test]
+    fn every_theme_converts_both_ways() {
+        for id in ThemeId::ALL {
+            assert_eq!(ThemeId::from(ThemeSetting::from(id)), id);
+        }
+    }
+
+    #[test]
+    fn a_theme_round_trips_through_toml() {
+        let text = "theme = \"amethyst\"";
+        let options: MenuOptions = toml::from_str(text).expect("parses");
+        assert_eq!(options.theme(), ThemeId::Amethyst);
+    }
+
+    #[test]
+    fn an_unknown_theme_reads_as_vanilla() {
+        let options: MenuOptions = toml::from_str("theme = \"neon\"").expect("parses");
+        assert_eq!(options.theme(), ThemeId::Vanilla);
+    }
+
+    #[test]
     fn toggling_flips_the_style() {
         let mut options = MenuOptions::default();
         options.toggle_title_style();
@@ -90,9 +161,13 @@ mod tests {
     fn the_style_round_trips_through_toml() {
         let options = MenuOptions {
             title_style: TitleStyleSetting::Classic,
+            theme: ThemeSetting::Vanilla,
         };
         let text = toml::to_string(&options).expect("serializes");
-        assert_eq!(text.trim(), "title_style = \"classic\"");
+        assert_eq!(
+            text.trim(),
+            "title_style = \"classic\"\ntheme = \"vanilla\""
+        );
         assert_eq!(toml::from_str::<MenuOptions>(&text), Ok(options));
     }
 

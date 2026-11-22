@@ -5,7 +5,7 @@
 //!
 //! This module is a child of [`crate::window`] so it can reach the window
 //! state without widening its visibility. The input rules live in
-//! [`crate::creative_input`], the geometry in [`crate::creative_layout`].
+//! [`crate::screens::creative::input`], the geometry in [`crate::screens::creative::layout`].
 
 use std::time::Instant;
 
@@ -15,11 +15,11 @@ use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta};
 use winit::keyboard::{KeyCode, PhysicalKey};
 
 use super::App;
-use crate::creative_input::{Context, CreativeEvent, Key, KeyKind, KeyOutcome};
-use crate::creative_layout::CreativeLayout;
 use crate::game::GameEvent;
-use crate::inventory_screen::CREATIVE_GAMEMODE;
-use crate::screen::Screen;
+use crate::screens::creative::input::{Context, CreativeEvent, Key, KeyKind, KeyOutcome};
+use crate::screens::creative::layout::CreativeLayout;
+use crate::screens::inventory::draw::CREATIVE_GAMEMODE;
+use crate::screens::Screen;
 
 impl App {
     /// Whether the creative inventory is shown (a server container replaces
@@ -31,6 +31,7 @@ impl App {
     /// Opens the inventory key's screen: the creative window in creative
     /// mode, the survival inventory otherwise (MCP `Minecraft.runTick`).
     pub(super) fn open_inventory(&mut self) {
+        self.send_event(GameEvent::InventoryOpened);
         let creative = self
             .world
             .as_ref()
@@ -48,7 +49,15 @@ impl App {
     /// The layout of the creative window in the current display.
     fn creative_layout(&self) -> Option<CreativeLayout> {
         let size = self.window.as_ref()?.inner_size();
-        Some(CreativeLayout::new(size.width, size.height))
+        let has_effects = self
+            .world
+            .as_ref()
+            .is_some_and(|world| !world.hud().effects.is_empty());
+        Some(CreativeLayout::for_effects(
+            size.width,
+            size.height,
+            has_effects,
+        ))
     }
 
     /// What the input machine needs to know, once the game thread published

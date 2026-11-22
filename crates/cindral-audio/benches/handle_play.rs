@@ -3,6 +3,10 @@
 //! The cost of `AudioHandle::play` for the game thread, with room in the queue
 //! and with a full one (the drop path).
 
+use std::sync::Arc;
+
+use cindral_audio::cache::SoundCache;
+use cindral_audio::decode::DecodedSound;
 use cindral_audio::{channel, SoundRequest};
 use criterion::{criterion_group, criterion_main, Criterion};
 
@@ -23,6 +27,21 @@ fn play(c: &mut Criterion) {
         let (handle, _receiver) = channel(16);
         while handle.play(request.clone()) {}
         b.iter(|| handle.play(request.clone()));
+    });
+
+    c.bench_function("audio/sound_cache_evict_churn", |b| {
+        let dummy = DecodedSound {
+            sample_rate: 44_100,
+            frames: Arc::from(vec![[0.0, 0.0]; 10]),
+        };
+        b.iter(|| {
+            // Holds 50 sounds of 80 bytes (4,000 bytes). Inserting 500 sounds forces 450 evictions.
+            let mut cache = SoundCache::new(50 * 80);
+            for i in 0..500 {
+                let name = format!("sound_{i}");
+                cache.insert(name, dummy.clone());
+            }
+        });
     });
 }
 

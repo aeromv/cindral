@@ -20,7 +20,8 @@
 use crate::context::Ui;
 use crate::draw::{Color, SpriteSheet};
 use crate::geom::Rect;
-use crate::widgets::{chrome, gui_scale};
+use crate::theme::{fill_gradient, BackgroundSkin};
+use crate::widgets::gui_scale;
 
 /// Edge of one dirt tile in GUI units (`float f = 32.0F` in `drawBackground`).
 const TILE_GUI: f32 = 32.0;
@@ -133,8 +134,8 @@ fn tile_pixels(ui: &Ui) -> (f32, f32) {
 /// (`GuiScreen.drawBackground`): the dirt over the whole viewport.
 pub fn draw_menu_background(ui: &mut Ui) {
     let viewport = ui.viewport();
-    if ui.modern_chrome() {
-        chrome::menu_background(ui, viewport);
+    if let BackgroundSkin::Gradient { top, bottom, .. } = ui.theme().background {
+        fill_gradient(ui, viewport, (top, bottom));
         return;
     }
     let (_, tile) = tile_pixels(ui);
@@ -146,8 +147,8 @@ pub fn draw_menu_background(ui: &mut Ui) {
 /// `list` is the list rectangle in pixels and `scroll` the scroll offset in
 /// pixels: the dirt moves with the content, as it does in vanilla.
 pub fn draw_list_background(ui: &mut Ui, list: Rect, scroll: f32) {
-    if ui.modern_chrome() {
-        chrome::list_background(ui, list);
+    if let BackgroundSkin::Gradient { list: fill, .. } = ui.theme().background {
+        ui.draw().rect(list, fill);
         return;
     }
     let (_, tile) = tile_pixels(ui);
@@ -169,10 +170,14 @@ pub fn draw_list_overlay(ui: &mut Ui, list: Rect) {
         viewport.width,
         viewport.bottom() - list.bottom(),
     );
-    if ui.modern_chrome() {
-        chrome::menu_background_band(ui, viewport, top);
-        chrome::menu_background_band(ui, viewport, bottom);
-        chrome::list_edges(ui, list, scale);
+    if let BackgroundSkin::Gradient {
+        top: from,
+        bottom: to,
+        ..
+    } = ui.theme().background
+    {
+        fill_gradient(ui, top, (from, to));
+        fill_gradient(ui, bottom, (from, to));
         return;
     }
     draw_dirt(ui, top, origin, tile, BAND_TINT);

@@ -8,6 +8,7 @@
 
 pub mod angle;
 pub mod anim;
+pub mod boat;
 pub mod body_yaw;
 pub mod boss;
 pub mod cape;
@@ -33,6 +34,7 @@ pub mod shadow;
 pub mod snapshot;
 pub mod store;
 
+pub use angle::{lerp_degrees, wrap_degrees};
 pub use anim::{Animation, BedPose, SquidPose};
 pub use body_yaw::BodyYaw;
 pub use boss::{

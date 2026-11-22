@@ -14,9 +14,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-/// The groups of draws, in frame order. The sky follows the opaque terrain
-/// (it lies on the far plane and only fills the pixels left uncovered).
-pub const GROUP_NAMES: [&str; 5] = ["opaque", "sky", "entities", "translucent", "ui"];
+/// The groups of draws, in frame order.
+pub const GROUP_NAMES: [&str; 5] = ["sky", "opaque", "entities", "translucent", "ui"];
 /// Timestamps per frame: the start plus the end of every group.
 const STAMPS: u32 = GROUP_NAMES.len() as u32 + 1;
 /// Bytes of one resolved frame (`u64` per stamp).
@@ -34,6 +33,48 @@ pub(crate) const REQUIRED_FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_Q
 pub struct GpuTimings {
     /// One entry per name of [`GROUP_NAMES`].
     pub ms: [f32; GROUP_NAMES.len()],
+}
+
+/// Draw call counts emitted during a rendered frame, grouped by pass.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DrawCallStats {
+    /// Draw calls in the sky and panorama pass.
+    pub sky: u32,
+    /// Draw calls in the opaque terrain pass (solid + cutout + moving blocks).
+    pub opaque: u32,
+    /// Draw calls in the entity, shadow, glint, nametag and dropped-item pass.
+    pub entities: u32,
+    /// Draw calls in the translucent terrain, particle, weather and cloud pass.
+    pub translucent: u32,
+    /// Draw calls in the HUD, UI and post-process passes.
+    pub ui: u32,
+}
+
+impl DrawCallStats {
+    /// Total draw calls recorded across all groups in the frame.
+    #[must_use]
+    pub fn total(&self) -> u32 {
+        self.sky + self.opaque + self.entities + self.translucent + self.ui
+    }
+}
+
+/// Estimated GPU memory (VRAM) owned by [`crate::Renderer`], in bytes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VramStats {
+    /// Bytes held in chunk mesh vertex buffers and the shared quad index buffer.
+    pub chunk_buffers: u64,
+    /// Bytes held in dynamic vertex/uniform buffers (entities, UI, cameras).
+    pub dynamic_buffers: u64,
+    /// Bytes held in GPU textures (block array + mipmaps, depth, targets, atlases).
+    pub textures: u64,
+}
+
+impl VramStats {
+    /// Total tracked GPU memory in bytes.
+    #[must_use]
+    pub fn total_bytes(&self) -> u64 {
+        self.chunk_buffers + self.dynamic_buffers + self.textures
+    }
 }
 
 impl GpuTimings {
@@ -158,7 +199,9 @@ impl GpuTimer {
                 let stamps = read_stamps(&slot.buffer);
                 slot.buffer.unmap();
                 slot.in_flight = false;
-                self.latest = Some(GpuTimings::from_ticks(&stamps, self.period_ns));
+                if let Some(stamps) = stamps {
+                    self.latest = Some(GpuTimings::from_ticks(&stamps, self.period_ns));
+                }
             }
         }
     }
@@ -169,15 +212,16 @@ impl GpuTimer {
     }
 }
 
-/// Reads the mapped slot; the buffer must be mapped.
-fn read_stamps(buffer: &wgpu::Buffer) -> Vec<u64> {
+/// Reads the mapped slot into a stack-allocated array; the buffer must be mapped.
+fn read_stamps(buffer: &wgpu::Buffer) -> Option<[u64; STAMPS as usize]> {
     let Ok(mapped) = buffer.slice(..).get_mapped_range() else {
-        return Vec::new();
+        return None;
     };
-    mapped
-        .chunks_exact(8)
-        .map(|bytes| u64::from_le_bytes(bytes.try_into().unwrap_or([0; 8])))
-        .collect()
+    let mut out = [0u64; STAMPS as usize];
+    for (dst, bytes) in out.iter_mut().zip(mapped.chunks_exact(8)) {
+        *dst = u64::from_le_bytes(bytes.try_into().unwrap_or([0; 8]));
+    }
+    Some(out)
 }
 
 #[cfg(test)]

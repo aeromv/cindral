@@ -7,11 +7,13 @@
 use std::process::ExitCode;
 
 use cindral_client::args::{Args, Mode, USAGE};
-use cindral_client::{
-    audio_bridge, bench_scene, block_demo, entity_demo, headless, hud_demo, launch_session,
-    screenshot, setup_cli, ui_demo, window,
-};
+use cindral_client::demos::{bench_scene, block_demo, entity_demo, hud_demo, ui_demo};
+use cindral_client::{audio_bridge, headless, launch_session, screenshot, setup_cli, window};
 use tracing_subscriber::EnvFilter;
+
+#[global_allocator]
+static ALLOCATOR: cindral_core::profiling::CountingAllocator =
+    cindral_core::profiling::CountingAllocator::new();
 
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
@@ -40,6 +42,13 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+
+    if args.profile {
+        cindral_core::profiling::set_enabled(true);
+    }
+
+    // Kept alive for the whole run: dropping it stops the puffin stream.
+    let _profiler = cindral_core::profiling::serve();
 
     let result = match args.mode() {
         Mode::SetupAssets => setup_cli::run(),

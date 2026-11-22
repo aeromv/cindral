@@ -17,14 +17,17 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{KeyCode, PhysicalKey};
 
 use super::{App, CARET_BLINK_MS};
-use crate::anvil_field::Edit;
 use crate::game::GameEvent;
-use crate::inventory_input::{Button, ContainerAction, Context, InventoryAction, InventoryKey};
-use crate::inventory_screen::{screen_input, ScreenFacts};
-use crate::inventory_winit;
 use crate::options::{Action, Binding};
-use crate::screen::Screen;
-use crate::text_screens::{Done, Key, TextScreens};
+use crate::screens::anvil_field::Edit;
+use crate::screens::inventory::custom_gui::custom_region;
+use crate::screens::inventory::draw::{screen_input, ScreenFacts};
+use crate::screens::inventory::input::{
+    Button, ContainerAction, Context, InventoryAction, InventoryKey,
+};
+use crate::screens::inventory::winit_keys;
+use crate::screens::text::{Done, Key, TextScreens};
+use crate::screens::Screen;
 
 impl App {
     /// Handles a key press while the inventory or a container screen is open.
@@ -72,7 +75,17 @@ impl App {
                 .as_ref()
                 .is_some_and(|world| world.status().gamemode == 1),
             anvil: name.map(|(_, view)| view),
-            caret_visible: (self.started.elapsed().as_millis() / CARET_BLINK_MS).is_multiple_of(2),
+            caret_visible: (self.clock.started.elapsed().as_millis() / CARET_BLINK_MS)
+                .is_multiple_of(2),
+            effects: self
+                .world
+                .as_ref()
+                .map_or_else(Vec::new, |world| world.hud().effects.clone()),
+            custom_texture: custom_region(
+                self.assets.files.custom_guis(),
+                view,
+                self.camera.position().y.floor() as i32,
+            ),
         }
     }
     /// The facts of the open inventory screen; the default when none is open.
@@ -114,7 +127,7 @@ impl App {
             _ => event
                 .text
                 .as_deref()
-                .filter(|text| !self.ctrl_held && !text.chars().any(char::is_control))
+                .filter(|text| !self.input.ctrl_held && !text.chars().any(char::is_control))
                 .map(Edit::Insert),
         };
         let Some(edit) = edit else {
@@ -147,6 +160,7 @@ impl App {
             viewport,
             world.window_view(),
             world.status().gamemode,
+            !world.hud().effects.is_empty(),
         ))
     }
     /// The stacks a drag split in progress will leave in the slots.
@@ -175,12 +189,12 @@ impl App {
             self.inventory_key(binding);
         }
         let (Some((layout, context)), Some(button)) =
-            (self.inventory_screen(), inventory_winit::button(button))
+            (self.inventory_screen(), winit_keys::button(button))
         else {
             return;
         };
         if state == ElementState::Pressed && button == Button::Left {
-            if let Some(hotspot) = layout.hotspot_at(self.pointer) {
+            if let Some(hotspot) = layout.hotspot_at(self.input.pointer) {
                 self.send_container(ContainerAction::Press(hotspot));
                 return;
             }
@@ -247,7 +261,7 @@ impl App {
         let text = event
             .text
             .as_deref()
-            .filter(|_| !self.ctrl_held)
+            .filter(|_| !self.input.ctrl_held)
             .filter(|text| !text.chars().any(char::is_control));
         let key = match code {
             KeyCode::Escape => Key::Escape,
@@ -260,12 +274,14 @@ impl App {
                 None => return,
             },
         };
-        let Some(atlas) = self.ui_atlas.as_ref() else {
+        let Some(atlas) = self.assets.ui_atlas.as_deref() else {
             return;
         };
         let measure = |text: &str| atlas.measure(text, 1.0);
         if let Some(done) = self.text_screens.key(key, &measure) {
             self.finish_text_screen(done);
+        } else if let Some(preview) = self.text_screens.sign_preview() {
+            self.send_event(preview);
         }
     }
 }

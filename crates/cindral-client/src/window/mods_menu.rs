@@ -4,7 +4,7 @@
 //! by default) that opens and closes the menu, the keys it takes, the blur it
 //! puts over the game and the changes it makes, HUD widgets included.
 //!
-//! The screen is drawn by `MenuFlow` (see `menu_flow/mods.rs`) and laid out in
+//! The screen is drawn by `MenuFlow` (see `screens/menu_flow/mods.rs`) and laid out in
 //! `cindral_ui::menus::mods`; the blur is applied by the renderer.
 
 use std::time::Instant;
@@ -12,20 +12,23 @@ use std::time::Instant;
 use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::KeyCode;
 
+use cindral_builtin_mods::{CombatInfo, KeyState, MAX_EFFECTS};
 use cindral_core::lang::Lang;
 use cindral_render::ModWidgetView;
 use cindral_ui::menus::{ModsOutcome, ModsView};
 use cindral_ui::FontAtlas;
 
 use super::App;
-use crate::hud_editor_view;
-use crate::item_icons::{slot_item, ItemView};
-use crate::menu_flow::MenuFlow;
-use crate::mods_hud_view::{mod_widget_views, WidgetIcons};
-use crate::mods_runtime::{FrameInput, ModsRuntime};
-use crate::mods_view;
+use crate::game::GameEvent;
+use crate::mods::hud::mod_widget_views;
+use crate::mods::hud_editor;
+use crate::mods::icons::ModIcons;
+use crate::mods::menu;
+use crate::mods::runtime::{FrameInput, ModsRuntime};
 use crate::options::{Action, Binding};
-use crate::screen::Screen;
+use crate::resources::item_icons::ItemView;
+use crate::screens::menu_flow::MenuFlow;
+use crate::screens::Screen;
 
 /// How blurred the game behind the current screen is, `0.0` to `1.0`: the
 /// mods menu blurs it (and the blur fades in while the menu opens).
@@ -40,60 +43,16 @@ pub(super) fn background_blur(screen: Screen, menu: &MenuFlow) -> f32 {
 /// player drags them, so the HUD leaves them out while it is open.
 pub(super) fn hud_widgets(
     screen: Screen,
-    (mods, icons): (&ModsRuntime, &WidgetIcons),
+    mods: &ModsRuntime,
     font: &FontAtlas,
     display: (u32, u32),
+    icons: &ModIcons<'_>,
 ) -> Vec<ModWidgetView> {
     if screen == Screen::Mods {
         Vec::new()
     } else {
-        mod_widget_views(mods.hud_widgets(), icons, font, display)
+        mod_widget_views(mods.hud_widgets(), font, display, icons)
     }
-}
-
-/// The player window slots of the four armour pieces, helmet first.
-const ARMOR_SLOTS: [usize; 4] = [5, 6, 7, 8];
-
-/// The worn armour and the held item of the local player, as stacks.
-fn worn_and_held(
-    world: &crate::world_view::WorldView,
-) -> (
-    [Option<&cindral_protocol::packets::play::ItemStack>; 4],
-    Option<&cindral_protocol::packets::play::ItemStack>,
-) {
-    let slots = &world.window_view().player_slots;
-    (
-        ARMOR_SLOTS.map(|slot| slots[slot].as_ref()),
-        super::held_stack(world),
-    )
-}
-
-/// What a mod line may draw as its picture this frame: the icons of the worn
-/// armour and of the held item, and the status icon sheet.
-pub(super) fn widget_icons(
-    world: Option<&crate::world_view::WorldView>,
-    items: ItemView<'_>,
-    atlas: Option<&cindral_assets::GuiAtlas>,
-) -> WidgetIcons {
-    let mut icons = WidgetIcons::default().with_atlas(atlas);
-    if let Some(world) = world {
-        let (armor, held) = worn_and_held(world);
-        icons.armor = armor.map(|stack| stack.map(|stack| slot_item(items, stack)));
-        icons.held = held.map(|stack| slot_item(items, stack));
-    }
-    icons
-}
-
-/// The mod's view of one stack: its name and wear.
-fn piece(
-    stack: &cindral_protocol::packets::play::ItemStack,
-) -> Option<cindral_builtin_mods::ArmorPiece> {
-    let item = cindral_game::items::lookup(i32::from(stack.item_id))?;
-    Some(cindral_builtin_mods::ArmorPiece {
-        name: item.name,
-        damage: stack.damage,
-        max_damage: item.max_damage,
-    })
 }
 
 /// What the mods menu lists and the HUD widgets it lets the player move: built
@@ -101,13 +60,16 @@ fn piece(
 /// reads it.
 pub(super) fn view_for(
     screen: Screen,
-    (mods, lang, icons): (&ModsRuntime, &Lang, &WidgetIcons),
+    (mods, lang): (&ModsRuntime, &Lang),
     (font, display): (&FontAtlas, (u32, u32)),
+    icons: &ModIcons<'_>,
 ) -> ModsView {
     if screen == Screen::Mods {
+        let mut hud = hud_editor::build(mods.registry(), lang, font, display, icons);
+        hud.history = mods.history_state();
         ModsView {
-            hud: hud_editor_view::build(mods.registry(), lang, icons, font, display),
-            ..mods_view::build(mods.registry(), lang)
+            hud,
+            ..menu::build(mods.registry(), lang)
         }
     } else {
         ModsView::default()
@@ -115,6 +77,21 @@ pub(super) fn view_for(
 }
 
 impl App {
+    /// What the pictures of the mod widgets are made from this frame: the
+    /// inventory of the session, the item resources and the GUI textures.
+    pub(super) fn mod_icons(&self) -> ModIcons<'_> {
+        let world = self.world.as_ref();
+        ModIcons {
+            slots: world.map(|world| &world.window_view().player_slots[..]),
+            selected: world.map_or(0, |world| world.hud().selected_slot),
+            items: Some(ItemView::new(
+                self.assets.items.as_deref(),
+                self.dials.frames(),
+            )),
+            gui_atlas: self.assets.gui_atlas.as_ref(),
+        }
+    }
+
     /// The key bound to [`Action::Mods`] (right Shift by default, the left one
     /// stays the sneak key) opens the mods menu over a game and closes it
     /// again. It is taken before the other key bindings so it triggers no
@@ -135,35 +112,44 @@ impl App {
     /// Feeds the built-in mods once per frame with what the window knows.
     pub(super) fn update_mods(&mut self, now: Instant) {
         let eye = self.camera.eye();
-        let mut frame = FrameInput {
-            now_ms: u64::try_from(now.duration_since(self.started).as_millis()).unwrap_or(u64::MAX),
-            fps: self.fps.round() as u32,
-            frame_ms: self.frame_ms,
+        let (hud, slots) = match self.world.as_ref() {
+            Some(world) => (Some(world.hud()), Some(&world.window_view().player_slots)),
+            None => (None, None),
+        };
+        let (armor, held) = slots.map_or(Default::default(), |slots| {
+            let selected = hud.map_or(0, |hud| hud.selected_slot);
+            crate::mods::facts::equipment(slots, selected)
+        });
+        self.mods.update(&FrameInput {
+            now_ms: u64::try_from(now.duration_since(self.clock.started).as_millis())
+                .unwrap_or(u64::MAX),
+            fps: self.clock.fps.round() as u32,
+            frame_ms: self.clock.frame_ms,
             eye: [eye.x, eye.y, eye.z],
             yaw_radians: self.camera.yaw,
             pitch_radians: self.camera.pitch,
             sprinting: self.held(Action::Sprint),
-            ping_ms: self.world.as_ref().and_then(|world| world.hud().ping_ms),
-            keys: cindral_builtin_mods::KeyState {
+            ping_ms: hud.and_then(|hud| hud.ping_ms),
+            keys: KeyState {
                 forward: self.held(Action::Forward),
                 left: self.held(Action::Left),
                 back: self.held(Action::Back),
                 right: self.held(Action::Right),
                 jump: self.held(Action::Jump),
-                sneak: self.held(Action::Sneak),
                 attack: self.held(Action::Attack),
                 use_item: self.held(Action::Use),
             },
-            ..FrameInput::default()
-        };
-        if let Some(world) = self.world.as_ref() {
-            frame.set_facts(&world.hud().mod_facts);
-            // The window's own copy of the slots is newer than the game's.
-            let (armor, held) = worn_and_held(world);
-            frame.armor = armor.map(|stack| stack.and_then(piece));
-            frame.held = held.and_then(piece);
-        }
-        self.mods.update(&frame);
+            combat: hud.map_or(CombatInfo::default(), |hud| CombatInfo {
+                hits: hud.combat.0,
+                hurts: hud.combat.1,
+                last_reach_cm: hud.last_reach_cm,
+            }),
+            armor,
+            held,
+            effects: hud.map_or([None; MAX_EFFECTS], |hud| {
+                crate::mods::facts::effects(&hud.active_effects)
+            }),
+        });
     }
 
     /// Opens the mods menu over the game, or closes it when it is open.
@@ -171,6 +157,8 @@ impl App {
         let next = if self.screen == Screen::Mods {
             Screen::None
         } else {
+            // "Cancel" of the HUD editor goes back to the state of now.
+            self.mods.begin_edit();
             Screen::Mods
         };
         self.set_screen(next);
@@ -181,14 +169,20 @@ impl App {
     /// went through, never for the frames of a drag. A change the registry
     /// refuses (a mod or setting that does not exist) is logged and dropped.
     pub(super) fn apply_mods_change(&mut self, change: &ModsOutcome) {
-        match mods_view::apply(self.mods.registry_mut(), change) {
+        match self.mods.apply_change(change) {
             Ok(true) => {
                 self.options.mods = self.mods.config();
                 self.save_options();
+                self.send_legacy_animations();
             }
             Ok(false) => {}
             Err(error) => tracing::warn!(%error, "ignored a change of the mods menu"),
         }
+    }
+
+    /// Tells the game thread which 1.7 animations to run (ADR-0079).
+    pub(super) fn send_legacy_animations(&self) {
+        self.send_event(GameEvent::LegacyAnimations(self.mods.legacy_animations()));
     }
 
     /// Hands a key to the mods menu. Escape closes it from the list; on the
@@ -240,19 +234,10 @@ mod tests {
             ..FrameInput::default()
         });
         let font = FontAtlas::fallback();
-        let on_hud = hud_widgets(
-            Screen::None,
-            (&mods, &WidgetIcons::default()),
-            &font,
-            (800, 600),
-        );
+        let on_hud = hud_widgets(Screen::None, &mods, &font, (800, 600), &ModIcons::default());
         assert!(!on_hud.is_empty(), "the HUD draws it in the game");
-        assert!(hud_widgets(
-            Screen::Mods,
-            (&mods, &WidgetIcons::default()),
-            &font,
-            (800, 600)
-        )
-        .is_empty());
+        assert!(
+            hud_widgets(Screen::Mods, &mods, &font, (800, 600), &ModIcons::default()).is_empty()
+        );
     }
 }

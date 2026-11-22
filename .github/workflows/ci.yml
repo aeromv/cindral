@@ -53,6 +53,9 @@ jobs:
             "crates/cindral-assets/client-pack/cindral/textures/ui/panorama/panorama_4.png MIT OR Apache-2.0, Cindral contributors (gen_art.py)"
             "crates/cindral-assets/client-pack/cindral/textures/ui/panorama/panorama_5.png MIT OR Apache-2.0, Cindral contributors (gen_art.py)"
             "crates/cindral-assets/client-pack/cindral/font/Inter-SemiBold.ttf OFL-1.1, The Inter Project Authors"
+            "crates/cindral-assets/client-pack/cindral/font/hd/16.png MIT OR Apache-2.0, Cindral project owner"
+            "crates/cindral-assets/client-pack/cindral/font/hd/24.png MIT OR Apache-2.0, Cindral project owner"
+            "crates/cindral-assets/client-pack/cindral/font/hd/32.png MIT OR Apache-2.0, Cindral project owner"
             "crates/cindral-assets/client-pack/cindral/textures/ui/settings.png MIT OR Apache-2.0, Umicraft contributors"
           )
 

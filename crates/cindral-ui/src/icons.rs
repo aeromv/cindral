@@ -50,15 +50,23 @@ pub enum Icon {
     Camera,
     /// A keyboard: keystrokes.
     Keyboard,
-    /// A shield: armour status.
+    /// A lightning bolt: the combo counter.
+    Lightning,
+    /// A shield: armor status.
     Shield,
     /// A flask: potion effects.
     Flask,
+    /// A sword: 1.7 animations.
+    Sword,
+    /// A compass: the direction HUD.
+    Compass,
+    /// A cape: the Capes mod.
+    Cape,
 }
 
 impl Icon {
     /// Every icon, in the order of their bitmaps and characters.
-    pub const ALL: [Icon; 17] = [
+    pub const ALL: [Icon; 21] = [
         Icon::Grid,
         Icon::Sliders,
         Icon::Search,
@@ -74,8 +82,12 @@ impl Icon {
         Icon::Binoculars,
         Icon::Camera,
         Icon::Keyboard,
+        Icon::Lightning,
         Icon::Shield,
         Icon::Flask,
+        Icon::Sword,
+        Icon::Compass,
+        Icon::Cape,
     ];
 
     fn index(self) -> usize {

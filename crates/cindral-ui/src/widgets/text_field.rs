@@ -582,27 +582,11 @@ fn draw_field(
     focused: bool,
     scale: f32,
 ) {
-    if ui.modern_chrome() {
-        // The Cindral look: a dark rounded box, its rim lit while focused.
-        let rim = if focused {
-            crate::modern::theme::ACCENT
-        } else {
-            [1.0, 1.0, 1.0, 0.16]
-        };
-        let radius = 2.0 * scale;
-        ui.draw().rounded_rect(rect, radius, rim);
-        ui.draw().rounded_rect(
-            rect.deflate(Insets::all(BORDER_UNITS * scale)),
-            radius,
-            [0.035, 0.034, 0.038, 0.96],
-        );
-    } else {
-        ui.draw().rect(rect, style::FIELD_BORDER);
-        ui.draw().rect(
-            rect.deflate(Insets::all(BORDER_UNITS * scale)),
-            style::FIELD_BACKGROUND,
-        );
-    }
+    ui.draw().rect(rect, style::FIELD_BORDER);
+    ui.draw().rect(
+        rect.deflate(Insets::all(BORDER_UNITS * scale)),
+        style::FIELD_BACKGROUND,
+    );
     if inner.is_empty() {
         return;
     }

@@ -12,6 +12,8 @@ use std::time::Instant;
 use super::overlay_views::{ActionBarView, BossView, SidebarView, TabListView, TitleView};
 use cindral_game::chat::{ClickEvent, HoverEvent};
 use cindral_game::hud::{vitals_view, BottomBar, HeldNameView, VitalsInput, VitalsView};
+use cindral_game::inventory::effect_list::EffectLine;
+use cindral_game::server::effects::ActiveEffect;
 use cindral_ui::mod_widget::ModWidgetView;
 use cindral_ui::SlotItem;
 
@@ -60,6 +62,11 @@ pub struct HudState {
     pub now: Option<Instant>,
     /// The vanilla F3 screen (P9-g), `None` while F3 is off.
     pub debug_f3: Option<DebugF3View>,
+    /// The compact "fps, chunks, entities, updates" line of the Show FPS
+    /// option; drawn only while the F3 screen is off.
+    pub fps_line: Option<String>,
+    /// The timer graph of the Lagometer option, drawn under the F3 screen.
+    pub lagometer: Option<LagometerView>,
     /// The action bar text and its opacity, when a message is displayed.
     pub action_bar: Option<ActionBarView>,
     /// The title and subtitle, when displayed.
@@ -84,33 +91,16 @@ pub struct HudState {
     /// The latency the server reports for the local player, in milliseconds,
     /// for the ping mod; `None` until the tab list has the player's entry.
     pub ping_ms: Option<u32>,
-    /// What the built-in PvP mods show (Armor Status, Potion Effects).
-    pub mod_facts: ModFacts,
-}
-
-/// The worn armour and the active effects of the local player, for the
-/// built-in mods. Published again when one changes or a timer passes a second.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ModFacts {
-    /// The worn armour, helmet first: item id and damage.
-    pub armor: [Option<(i16, i16)>; 4],
-    /// The active effects: id, amplifier and remaining ticks.
-    pub effects: Vec<(u8, i8, i32)>,
-    /// What the combat mods (Reach Display, Combo Counter) count.
-    pub combat: CombatFacts,
-}
-
-/// The local player's fights, counted from the start of the session.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct CombatFacts {
-    /// Hits the server confirmed: an entity the player had just attacked
-    /// was hurt (`Entity Status` 2).
-    pub hits: u32,
-    /// The distance of the last attack from the eye to the point the ray
-    /// entered the target's box, in hundredths of a block.
+    /// The potion effects of the player, in the order of the list beside the
+    /// survival and creative inventories; empty without effects.
+    pub effects: Vec<EffectLine>,
+    /// The active potion effects with their ticks left, for the potion effects mod.
+    pub active_effects: Vec<ActiveEffect>,
+    /// The `(hits dealt, hurts taken)` totals of the session, for the combo counter mod.
+    pub combat: (u32, u32),
+    /// The reach of the last confirmed hit, in hundredths of a block, for the
+    /// Reach Display mod.
     pub last_reach_cm: Option<u16>,
-    /// Times the local player was hurt.
-    pub hurts: u32,
 }
 
 /// The two columns of the vanilla F3 screen, as built by
@@ -121,6 +111,20 @@ pub struct DebugF3View {
     pub left: Vec<String>,
     /// The right column; may carry the `\u{a7}a` / `\u{a7}c` colour prefixes.
     pub right: Vec<String>,
+}
+
+/// The timers the Lagometer graphs, in microseconds, oldest sample first.
+///
+/// The client keeps the vectors between frames, so refreshing them does not
+/// allocate once they have grown to the ring size.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LagometerView {
+    /// The whole frame.
+    pub frame: Vec<u32>,
+    /// The world sync: events, meshing hand-over and uploads.
+    pub sync: Vec<u32>,
+    /// The chunk mesh uploads alone.
+    pub upload: Vec<u32>,
 }
 
 /// The chat options that shape the log (`GameSettings.chat*`), as the
@@ -251,6 +255,8 @@ impl Default for HudState {
             chat_style: ChatStyle::default(),
             now: None,
             debug_f3: None,
+            fps_line: None,
+            lagometer: None,
             action_bar: None,
             title: None,
             sidebar: None,
@@ -262,7 +268,10 @@ impl Default for HudState {
             score: 0,
             mod_widgets: Vec::new(),
             ping_ms: None,
-            mod_facts: ModFacts::default(),
+            effects: Vec::new(),
+            active_effects: Vec::new(),
+            combat: (0, 0),
+            last_reach_cm: None,
         }
     }
 }

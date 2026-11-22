@@ -1,0 +1,468 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! One-time loading of the 1.8 block models and the real texture array.
+//!
+//! [`ModelResources::load`] verifies the user's official 1.8.8 client jar,
+//! reads the blockstate, block-model, block-texture and item-texture entries
+//! once, builds the deterministic [`BlockAtlas`] and bakes the
+//! [`BlockModelSet`] from [`definitions`]. It also samples the two optional
+//! biome colormaps into the immutable [`BiomeTints`] table (ADR-0009). The
+//! resulting [`ModelMeshContext`] is shared by every meshing worker through an
+//! [`Arc`], so a chunk job never touches the disk.
+//!
+//! The bundle is also the single source of the acceptance counts printed by
+//! `--block-demo`: texture entries are counted from the same in-memory file
+//! list that the atlas was built from.
+//!
+//! Legal boundary (spec §3): the jar is only read from the user's installation
+//! at runtime. No Mojang asset is embedded in this crate or copied into the
+//! repository/release.
+
+use std::collections::BTreeMap;
+use std::sync::{Arc, RwLock};
+
+use cindral_assets::{AssetsError, BlockAtlas, ClientResources};
+use cindral_mesh::ctm::CtmTable;
+use cindral_mesh::natural::NaturalTable;
+use cindral_mesh::tint::BiomeTints;
+use cindral_mesh::ModelMeshContext;
+use cindral_model::{definitions, BlockModelSet, ModelError, ResourceSource};
+use cindral_packext::natural::NaturalRules;
+use thiserror::Error;
+
+use crate::resources::item_icons::ItemResources;
+use crate::resources::official;
+
+/// Global cache of base client resources loaded from the official jar to avoid redundant 8 MB
+/// disk reads, SHA-1 re-hashing, and texture re-decoding across pack swaps and hot reloads.
+static BASE_RESOURCES_CACHE: RwLock<Option<ClientResources>> = RwLock::new(None);
+
+/// Virtual prefix of the block textures inside the client jar.
+const BLOCK_TEXTURES_PREFIX: &str = "assets/minecraft/textures/blocks/";
+/// Virtual prefix of the item textures inside the client jar.
+const ITEM_TEXTURES_PREFIX: &str = "assets/minecraft/textures/items/";
+
+/// Number of texture entries of one kind.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TextureEntries {
+    /// Decoded PNG layers.
+    pub png: usize,
+    /// Animation metadata files; these add no atlas layer.
+    pub mcmeta: usize,
+}
+
+impl TextureEntries {
+    /// Total files of this kind, including the metadata.
+    #[must_use]
+    pub fn total(self) -> usize {
+        self.png + self.mcmeta
+    }
+}
+
+/// The deterministic counts of one loaded resource set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModelStats {
+    /// Blockstate documents parsed from the jar.
+    pub blockstates: usize,
+    /// Model documents under `models/block`.
+    pub source_models: usize,
+    /// Block texture PNGs and their `.mcmeta` files.
+    pub block_textures: TextureEntries,
+    /// Item texture PNGs and their `.mcmeta` files.
+    pub item_textures: TextureEntries,
+    /// Texture-array layers, including the missing-texture checker.
+    pub layers: u32,
+    /// Atlas layer width in texels.
+    pub atlas_width: u32,
+    /// Atlas layer height in texels.
+    pub atlas_height: u32,
+    /// Exact RGBA8 payload size of the atlas.
+    pub atlas_bytes: usize,
+    /// Wire block states that resolved to a baked model.
+    pub block_states: usize,
+    /// Metadata mappings that used a blockstate document's first variant.
+    pub fallback_variants: usize,
+    /// Whether the jar provided both biome colormaps, enabling grass/leaf tint.
+    pub biome_tints: bool,
+}
+
+/// Every failure of the official block-model loader.
+#[derive(Debug, Error)]
+pub enum ModelResourcesError {
+    /// Neither `$HOME/.minecraft` nor the platform equivalent exists.
+    #[error("no official Minecraft installation found for the 1.8.8 block models and atlas")]
+    NoInstallation,
+    /// The installation layout, version JSON or client jar failed verification.
+    #[error(transparent)]
+    Assets(#[from] AssetsError),
+    /// A blockstate/model failed to parse or bake.
+    #[error(transparent)]
+    Model(#[from] ModelError),
+}
+
+/// The owned resources and the shared model-meshing context of one run.
+#[derive(Debug, Clone)]
+pub struct ModelResources {
+    resources: ClientResources,
+    models: Arc<BlockModelSet>,
+    context: Arc<ModelMeshContext>,
+    items: Arc<ItemResources>,
+}
+
+impl ModelResources {
+    /// Loads the 1.8.8 models and atlas from the installation found in the
+    /// environment or the Cindral asset cache.
+    ///
+    /// # Errors
+    /// [`ModelResourcesError::NoInstallation`] when there is no installation or cache,
+    /// or the asset/model error of the first corrupt or missing resource.
+    pub fn load() -> Result<Self, ModelResourcesError> {
+        Self::load_with_packs(&[])
+    }
+
+    /// Returns the cached base [`ClientResources`], reading and verifying the official jar
+    /// from disk on first access. Subsequent calls reuse the decoded base resources directly.
+    ///
+    /// # Errors
+    /// [`ModelResourcesError`] if the jar cannot be found or decoded.
+    pub fn get_or_load_base() -> Result<ClientResources, ModelResourcesError> {
+        if let Ok(guard) = BASE_RESOURCES_CACHE.read() {
+            if let Some(base) = guard.as_ref() {
+                return Ok(base.clone());
+            }
+        }
+        let jar = official::find_verified_jar().map_err(|_| ModelResourcesError::NoInstallation)?;
+        let base = ClientResources::load(&jar)?;
+        if let Ok(mut guard) = BASE_RESOURCES_CACHE.write() {
+            *guard = Some(base.clone());
+        }
+        Ok(base)
+    }
+
+    /// Clears the cached base resources, forcing the next resource load to re-read the jar from disk.
+    pub fn clear_base_cache() {
+        if let Ok(mut guard) = BASE_RESOURCES_CACHE.write() {
+            *guard = None;
+        }
+    }
+
+    /// Loads the base resources and layers the requested resource packs over them.
+    ///
+    /// Reuses cached base resources when available, eliminating redundant jar I/O and base texture decoding.
+    ///
+    /// # Errors
+    /// [`ModelResourcesError`] if loading or baking fails.
+    pub fn load_with_packs(
+        packs: &[cindral_assets::ResourcePack],
+    ) -> Result<Self, ModelResourcesError> {
+        let base = Self::get_or_load_base()?;
+        Self::from_resources_and_packs(base, packs)
+    }
+
+    /// Loads resource packs from disk paths and applies them over base resources.
+    ///
+    /// # Errors
+    /// [`ModelResourcesError`] if pack loading or model baking fails.
+    pub fn load_with_pack_paths(paths: &[std::path::PathBuf]) -> Result<Self, ModelResourcesError> {
+        Self::load_with_packs(&super::game_files::load_packs(paths))
+    }
+
+    /// Builds [`ModelResources`] from base resources and active resource packs.
+    ///
+    /// # Errors
+    /// [`ModelResourcesError`] on asset or model errors.
+    pub fn from_resources_and_packs(
+        base: ClientResources,
+        packs: &[cindral_assets::ResourcePack],
+    ) -> Result<Self, ModelResourcesError> {
+        let (mut resources, base) = if packs.is_empty() {
+            (base, None)
+        } else {
+            (base.apply_packs(packs)?, Some(base))
+        };
+        // The reference bakes what it can and logs the rest (`ModelBakery`
+        // catches the error of each model). Here a document of a pack that
+        // does not bake gives way to the one of the jar, and when the error
+        // does not name a document of a pack, all of them do: a pack must
+        // never cost the whole set (the caller would fall back to the
+        // procedural textures).
+        let mut retries = 0;
+        let (models, items) = loop {
+            let error = match bake(&resources) {
+                Ok(baked) => break baked,
+                Err(error) => error,
+            };
+            let Some(base) = base.as_ref() else {
+                return Err(error.into());
+            };
+            let single = retries < MAX_DOCUMENT_RETRIES
+                && document_paths(&error)
+                    .iter()
+                    .any(|path| resources.restore_document(base, path));
+            retries += 1;
+            if single {
+                tracing::warn!(%error, "ignoring a pack model that does not bake");
+                continue;
+            }
+            let dropped = resources.restore_documents(base);
+            if dropped == 0 {
+                return Err(error.into());
+            }
+            tracing::warn!(
+                %error,
+                dropped,
+                "ignoring every model and blockstate of the resource packs"
+            );
+        };
+        let models = Arc::new(models);
+        let tints = resources.colormaps().map(|maps| {
+            Arc::new(BiomeTints::from_samplers(
+                |temperature, rainfall| maps.grass.sample(temperature, rainfall),
+                |temperature, rainfall| maps.foliage.sample(temperature, rainfall),
+            ))
+        });
+        let atlas = resources.atlas().layout().clone();
+        let ctm = ctm_table(packs, &atlas);
+        let natural = natural_table(packs, &atlas);
+        let custom_colors = custom_block_colors(packs);
+        let context = Arc::new(ModelMeshContext {
+            models: Arc::clone(&models),
+            atlas: Arc::new(atlas),
+            tints,
+            ctm,
+            natural,
+            custom_colors,
+        });
+        tracing::info!(
+            blockstates = models.blockstate_count(),
+            source_models = models.source_model_count(),
+            layers = resources.atlas().layers(),
+            biome_tints = context.tints.is_some(),
+            ctm_rules = context.ctm.as_ref().map_or(0, |table| table.len()),
+            custom_colors = context.custom_colors.is_some(),
+            natural_rules = context.natural.as_ref().map_or(0, |table| table.len()),
+            packs = packs.len(),
+            "loaded 1.8 block models, atlas and resource packs"
+        );
+        let items = Arc::new(items);
+        Ok(Self {
+            resources,
+            models,
+            context,
+            items,
+        })
+    }
+
+    /// Reads and bakes one installation.
+    ///
+    /// The jar is read in one bulk pass; the model set and the texture layout
+    /// both come from that same [`ClientResources`] snapshot.
+    ///
+    /// # Errors
+    /// The asset, PNG/atlas or model error of the first invalid resource.
+    pub fn load_from_install(
+        install: &cindral_assets::install::OfficialInstall,
+    ) -> Result<Self, ModelResourcesError> {
+        let jar = official::open_client_jar(install)?;
+        let resources = ClientResources::load(&jar)?;
+        tracing::info!(root = %install.root().display(), "reading the 1.8 client jar");
+        Self::from_resources_and_packs(resources, &[])
+    }
+
+    /// The verified in-memory resources and their atlas.
+    #[must_use]
+    pub fn resources(&self) -> &ClientResources {
+        &self.resources
+    }
+
+    /// The decoded texture array.
+    #[must_use]
+    pub fn atlas(&self) -> &BlockAtlas {
+        self.resources.atlas()
+    }
+
+    /// The baked model set.
+    #[must_use]
+    pub fn models(&self) -> &BlockModelSet {
+        &self.models
+    }
+
+    /// The baked item models, shared with the icon provider.
+    #[must_use]
+    pub fn items(&self) -> Arc<ItemResources> {
+        Arc::clone(&self.items)
+    }
+
+    /// A clone of the immutable context shared with the mesh workers.
+    #[must_use]
+    pub fn context(&self) -> Arc<ModelMeshContext> {
+        Arc::clone(&self.context)
+    }
+
+    /// The counts used by the `--block-demo` report.
+    #[must_use]
+    pub fn stats(&self) -> ModelStats {
+        let atlas = self.atlas();
+        ModelStats {
+            blockstates: self.models.blockstate_count(),
+            source_models: self.models.source_model_count(),
+            block_textures: count_textures(&self.resources, BLOCK_TEXTURES_PREFIX),
+            item_textures: count_textures(&self.resources, ITEM_TEXTURES_PREFIX),
+            layers: atlas.layers(),
+            atlas_width: atlas.width(),
+            atlas_height: atlas.height(),
+            atlas_bytes: atlas.pixels().len(),
+            block_states: self.models.state_count(),
+            fallback_variants: self.models.fallback_count(),
+            biome_tints: self.resources.colormaps().is_some(),
+        }
+    }
+}
+
+/// How many documents of a pack are put back one by one before all are.
+const MAX_DOCUMENT_RETRIES: usize = 16;
+
+/// Bakes the block and item models of `resources`.
+/// The pack-feature folders, lowest priority first within one pack.
+const FEATURE_FOLDERS: [&str; 2] = ["assets/minecraft/mcpatcher/", "assets/minecraft/optifine/"];
+
+/// Parses the `ctm/**/*.properties` files of `packs` (ascending priority) and
+/// resolves them against `atlas`. The higher pack wins for one relative path,
+/// and within a pack `optifine/` wins over `mcpatcher/`, as
+/// [`cindral_assets::PackFiles::feature`] does. `None` when no rule is left.
+fn ctm_table(
+    packs: &[cindral_assets::ResourcePack],
+    atlas: &cindral_model::AtlasLayout,
+) -> Option<Arc<CtmTable>> {
+    let files = feature_files(packs, "ctm/");
+    if files.is_empty() {
+        return None;
+    }
+    let rules = cindral_packext::ctm::parse_rules(files, &block_id);
+    CtmTable::build(&rules, atlas, &cindral_game::debug_f3::biomes::biome_name).map(Arc::new)
+}
+
+/// The pack-feature files whose path relative to the feature folder starts
+/// with `prefix`, keyed by that relative path. A higher pack wins for one
+/// path, and within a pack `optifine/` wins over `mcpatcher/`, as
+/// [`cindral_assets::PackFiles::feature`] does.
+///
+/// It reads the packs in place instead of going through `PackFiles`, which
+/// would copy every kept file.
+pub(super) fn feature_files<'a>(
+    packs: &'a [cindral_assets::ResourcePack],
+    prefix: &str,
+) -> BTreeMap<&'a str, &'a [u8]> {
+    let mut files: BTreeMap<&str, &[u8]> = BTreeMap::new();
+    for pack in packs {
+        for (path, bytes) in pack.files() {
+            let relative = FEATURE_FOLDERS
+                .iter()
+                .find_map(|folder| path.strip_prefix(folder))
+                .filter(|relative| relative.starts_with(prefix));
+            if let Some(relative) = relative {
+                // `pack.files()` is sorted, so `mcpatcher/` is inserted
+                // before `optifine/` and the later one replaces it.
+                files.insert(relative, bytes);
+            }
+        }
+    }
+    files
+}
+
+/// The custom block colours of `packs`, or `None` when the Custom Colors
+/// option is off or the packs customise nothing.
+fn custom_block_colors(
+    packs: &[cindral_assets::ResourcePack],
+) -> Option<Arc<cindral_mesh::custom_colors::CustomColors>> {
+    if !crate::meshing::settings::custom_colors_enabled() {
+        return None;
+    }
+    let mut files = feature_files(packs, "colormap/");
+    files.extend(feature_files(packs, "color.properties"));
+    super::custom_colors::mesh_colors(&files, &block_id)
+}
+
+/// Parses `natural.properties` of `packs` and resolves it against `atlas`.
+/// `None` when no pack has the file or no rule is left. A broken file is
+/// logged and ignored.
+fn natural_table(
+    packs: &[cindral_assets::ResourcePack],
+    atlas: &cindral_model::AtlasLayout,
+) -> Option<Arc<NaturalTable>> {
+    let files = feature_files(packs, "natural.properties");
+    let bytes = files.get("natural.properties")?;
+    let rules = match NaturalRules::parse(bytes) {
+        Ok(rules) => rules,
+        Err(error) => {
+            tracing::warn!(%error, "ignoring natural.properties");
+            return None;
+        }
+    };
+    for (name, error) in &rules.rejected {
+        tracing::warn!(texture = %name, %error, "natural textures: invalid line");
+    }
+    NaturalTable::build(&rules, atlas).map(Arc::new)
+}
+
+/// The id of the block called `name` (`minecraft:glass`); other domains name
+/// no block.
+pub(super) fn block_id(name: &str) -> Option<u16> {
+    let name = name.strip_prefix("minecraft:")?;
+    definitions()
+        .iter()
+        .find(|definition| definition.name == name)
+        .map(|definition| definition.id)
+}
+
+fn bake(resources: &ClientResources) -> Result<(BlockModelSet, ItemResources), ModelError> {
+    Ok((
+        BlockModelSet::build(resources, definitions())?,
+        ItemResources::load(resources)?,
+    ))
+}
+
+/// The resource paths `error` may be about: it carries either a path or a
+/// model key such as `block/stone`.
+fn document_paths(error: &ModelError) -> Vec<String> {
+    let name = match error {
+        ModelError::Resource { path, .. }
+        | ModelError::Json { path, .. }
+        | ModelError::Invalid { path, .. }
+        | ModelError::UnresolvedTexture { path, .. }
+        | ModelError::ParentCycle { path }
+        | ModelError::ParentDepth { path, .. } => path,
+    };
+    vec![
+        name.clone(),
+        format!("assets/minecraft/models/{name}.json"),
+        format!("assets/minecraft/models/block/{name}.json"),
+    ]
+}
+
+/// Counts the PNG and `.mcmeta` entries below `prefix`.
+fn count_textures(resources: &ClientResources, prefix: &str) -> TextureEntries {
+    let mut entries = TextureEntries::default();
+    for path in resources.list(prefix) {
+        if path.ends_with(".png") {
+            entries.png += 1;
+        } else if path.ends_with(".png.mcmeta") {
+            entries.mcmeta += 1;
+        }
+    }
+    entries
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn texture_entries_count_the_metadata_separately() {
+        let entries = TextureEntries {
+            png: 373,
+            mcmeta: 9,
+        };
+        assert_eq!(entries.total(), 382);
+    }
+}

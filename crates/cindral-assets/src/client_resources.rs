@@ -70,6 +70,13 @@ const HIRES_BUDGET_BYTES: usize = 128 * 1024 * 1024;
 /// A normal source derives the edge from its largest frame (32 for 1.8.8).
 const DEFAULT_FRAME_SIZE: u32 = 16;
 
+/// The most layers the block atlas may have. A texture array larger than the
+/// device limit is rejected by the renderer, which then falls back to the
+/// procedural textures, so the pack would not show at all. 2048 is wgpu's
+/// default `max_texture_array_layers` and what desktop D3D12, Vulkan and
+/// Metal devices report.
+pub const MAX_ATLAS_LAYERS: usize = 2048;
+
 /// One decoded PNG before it is cropped and copied into the atlas.
 #[derive(Debug)]
 pub(crate) struct DecodedPng {
@@ -344,40 +351,6 @@ impl ClientResources {
     /// and [`crate::AssetsError::Image`] when a texture or a present colormap is not a
     /// decodable PNG, or when the colormap is not 256×256.
     pub fn load(jar: &ClientJar) -> AssetsResult<Self> {
-        Self::load_with_packs(jar, &[])
-    }
-
-    /// Loads the resources of `jar` with `packs` layered over them, last pack
-    /// on top, building the atlas once.
-    ///
-    /// The same as [`Self::load`] then [`Self::apply_packs`], without
-    /// decoding every texture and packing the atlas a second time.
-    ///
-    /// # Errors
-    ///
-    /// The errors of [`Self::load`] and [`Self::apply_packs`].
-    pub fn load_with_packs(
-        jar: &ClientJar,
-        packs: &[crate::resource_pack::ResourcePack],
-    ) -> AssetsResult<Self> {
-        let mut raw = RawResources::read(jar)?;
-        raw.overlay(packs);
-        Self::build_internal(raw.files, raw.colormaps, raw.gui, raw.glint)
-    }
-}
-
-/// The undecoded files of the client: those of the jar, then those of the
-/// packs layered over them.
-struct RawResources {
-    files: BTreeMap<String, Vec<u8>>,
-    colormaps: BTreeMap<String, Vec<u8>>,
-    gui: BTreeMap<String, Vec<u8>>,
-    glint: Option<Vec<u8>>,
-}
-
-impl RawResources {
-    /// Reads the files the client uses from `jar`.
-    fn read(jar: &ClientJar) -> AssetsResult<Self> {
         let entries = jar.read_prefixes(&[
             BLOCKSTATES_PREFIX,
             MODELS_PREFIX,
@@ -388,59 +361,65 @@ impl RawResources {
             UNKNOWN_SERVER_PATH,
             UNKNOWN_PACK_PATH,
             DEFAULT_PACK_PATH,
+            SIGN_PATH,
             GLINT_PATH,
         ])?;
 
-        let mut raw = Self {
-            files: BTreeMap::new(),
-            colormaps: BTreeMap::new(),
-            gui: BTreeMap::new(),
-            glint: None,
-        };
+        let mut files = BTreeMap::new();
+        let mut raw_colormaps = BTreeMap::new();
+        let mut raw_gui = BTreeMap::new();
+        let mut raw_glint = None;
         for (path, bytes) in entries {
             if path == GLINT_PATH {
-                raw.glint = Some(bytes);
+                raw_glint = Some(bytes);
             } else if path == GRASS_PATH || path == FOLIAGE_PATH {
-                raw.colormaps.insert(path, bytes);
+                raw_colormaps.insert(path, bytes);
             } else if is_gui_texture(&path) {
-                raw.gui.insert(path, bytes);
+                raw_gui.insert(path, bytes);
             } else if is_json_resource(&path)
                 || is_texture_metadata(&path)
                 || texture_key(&path).is_some()
             {
-                raw.files.insert(path, bytes);
+                files.insert(path, bytes);
             }
         }
-        Ok(raw)
+
+        Self::build_internal(files, raw_colormaps, raw_gui, raw_glint, None)
     }
 
-    /// Layers the files of `packs` over these, last pack on top.
-    fn overlay(&mut self, packs: &[crate::resource_pack::ResourcePack]) {
-        for pack in packs {
-            for (path, bytes) in pack.files() {
-                if path == GLINT_PATH {
-                    self.glint = Some(bytes.clone());
-                } else if path == GRASS_PATH || path == FOLIAGE_PATH {
-                    self.colormaps.insert(path.clone(), bytes.clone());
-                } else if is_gui_texture(path) {
-                    self.gui.insert(path.clone(), bytes.clone());
-                } else if texture_key(path).is_some() {
-                    // A texture of the wrong shape would fail the whole load:
-                    // keep the one underneath instead.
-                    if has_texture_shape(bytes) {
-                        self.files.insert(path.clone(), bytes.clone());
-                    } else {
-                        tracing::warn!(pack = pack.id(), path, "ignoring an invalid pack texture");
-                    }
-                } else if is_json_resource(path) || is_texture_metadata(path) {
-                    self.files.insert(path.clone(), bytes.clone());
-                }
-            }
+    /// Puts the model or blockstate document `path` back to the one of
+    /// `base`, removing it when `base` has none. Returns whether it changed.
+    ///
+    /// For the caller that bakes the models: a document of a pack that does
+    /// not bake gives way to the one underneath. The atlas does not depend
+    /// on these documents and stays as built.
+    pub fn restore_document(&mut self, base: &Self, path: &str) -> bool {
+        if !is_json_resource(path) || self.files.get(path) == base.files.get(path) {
+            return false;
         }
+        match base.files.get(path) {
+            Some(bytes) => self.files.insert(path.to_string(), bytes.clone()),
+            None => self.files.remove(path),
+        };
+        true
     }
-}
 
-impl ClientResources {
+    /// [`Self::restore_document`] for every model and blockstate document;
+    /// returns how many changed.
+    pub fn restore_documents(&mut self, base: &Self) -> usize {
+        let paths: Vec<String> = self
+            .files
+            .keys()
+            .chain(base.files.keys())
+            .filter(|path| is_json_resource(path))
+            .cloned()
+            .collect();
+        paths
+            .iter()
+            .filter(|path| self.restore_document(base, path))
+            .count()
+    }
+
     /// Builds a new [`ClientResources`] instance by layering resource packs
     /// over this base instance.
     ///
@@ -451,58 +430,117 @@ impl ClientResources {
     ///
     /// [`crate::AssetsError::Image`] if an overridden texture or colormap is invalid.
     pub fn apply_packs(&self, packs: &[crate::resource_pack::ResourcePack]) -> AssetsResult<Self> {
-        let mut raw = RawResources {
-            files: self.files.clone(),
-            colormaps: self.raw_colormaps.clone(),
-            gui: self.raw_gui.clone(),
-            glint: self.raw_glint.clone(),
-        };
-        raw.overlay(packs);
-        Self::build_internal(raw.files, raw.colormaps, raw.gui, raw.glint)
+        let mut files = self.files.clone();
+        let mut raw_colormaps = self.raw_colormaps.clone();
+        let mut raw_gui = self.raw_gui.clone();
+        let mut raw_glint = self.raw_glint.clone();
+        for pack in packs {
+            for (path, bytes) in pack.files() {
+                if path == GLINT_PATH {
+                    raw_glint = Some(bytes.clone());
+                } else if path == GRASS_PATH || path == FOLIAGE_PATH {
+                    raw_colormaps.insert(path.clone(), bytes.clone());
+                } else if is_gui_texture(path) {
+                    raw_gui.insert(path.clone(), bytes.clone());
+                } else if let Some(tile) = ctm_tile_path(path) {
+                    if has_texture_shape(bytes) {
+                        files.insert(tile, bytes.clone());
+                    } else {
+                        tracing::warn!(pack = pack.id(), path, "ignoring an invalid CTM tile");
+                    }
+                } else if texture_key(path).is_some() {
+                    // A texture of the wrong shape would fail the whole load:
+                    // keep the one underneath instead.
+                    if has_texture_shape(bytes) {
+                        files.insert(path.clone(), bytes.clone());
+                    } else {
+                        tracing::warn!(pack = pack.id(), path, "ignoring an invalid pack texture");
+                    }
+                } else if is_json_resource(path) || is_texture_metadata(path) {
+                    files.insert(path.clone(), bytes.clone());
+                }
+            }
+        }
+        drop_ctm_tiles_over_budget(&mut files, MAX_ATLAS_LAYERS);
+        Self::build_internal(files, raw_colormaps, raw_gui, raw_glint, Some(self))
     }
 
     /// Internal builder that constructs a complete [`ClientResources`].
+    ///
+    /// Without `base` (the client jar itself) an image that does not decode
+    /// is an error. With `base` (resource packs layered over it) such an
+    /// image is logged and gives way to the one of `base`, as the reference
+    /// keeps loading when one texture of a pack is broken
+    /// (`TextureMap.loadTextureAtlas` catches the error of each sprite).
     fn build_internal(
-        files: BTreeMap<String, Vec<u8>>,
-        raw_colormaps: BTreeMap<String, Vec<u8>>,
-        raw_gui: BTreeMap<String, Vec<u8>>,
-        raw_glint: Option<Vec<u8>>,
+        mut files: BTreeMap<String, Vec<u8>>,
+        mut raw_colormaps: BTreeMap<String, Vec<u8>>,
+        mut raw_gui: BTreeMap<String, Vec<u8>>,
+        mut raw_glint: Option<Vec<u8>>,
+        base: Option<&Self>,
     ) -> AssetsResult<Self> {
-        let keyed: Vec<_> = files
-            .iter()
-            .filter_map(|(path, bytes)| Some((texture_key(path)?, path, bytes)))
+        let texture_paths: Vec<String> = files
+            .keys()
+            .filter(|path| texture_key(path).is_some())
+            .cloned()
             .collect();
-        let images =
-            decode_in_parallel(&keyed, |(_, path, bytes)| DecodedPng::decode(path, bytes))?;
-        let textures: Vec<TextureLayer> = keyed
-            .into_iter()
-            .zip(images)
-            .map(|((key, path, _), image)| TextureLayer {
-                key,
-                path: path.clone(),
-                image,
-            })
-            .collect();
-
-        let mut decoded_colormaps = BTreeMap::new();
-        for (path, bytes) in &raw_colormaps {
-            decoded_colormaps.insert(path.clone(), DecodedPng::decode(path, bytes)?);
+        let decoded = decode_all(texture_paths.iter().map(|path| (path, &files[path])));
+        let mut textures = Vec::with_capacity(texture_paths.len());
+        for (path, result) in texture_paths.into_iter().zip(decoded) {
+            let image = match result {
+                Ok(image) => image,
+                Err(error) => {
+                    match restore(&mut files, base.map(|base| &base.files), &path, error)? {
+                        Some(image) => image,
+                        None => continue,
+                    }
+                }
+            };
+            if let Some(key) = texture_key(&path) {
+                textures.push(TextureLayer { key, path, image });
+            }
         }
 
-        let mut gui_images = decode_gui_textures(&raw_gui)?;
+        let mut decoded_colormaps = BTreeMap::new();
+        for path in raw_colormaps.keys().cloned().collect::<Vec<_>>() {
+            // The size is checked here too, so a colormap of the wrong size
+            // costs itself and not the whole load.
+            let checked = DecodedPng::decode(&path, &raw_colormaps[&path]).and_then(|png| {
+                Colormap::from_rgba8(&path, png.width, png.height, &png.pixels)?;
+                Ok(png)
+            });
+            let png = match checked {
+                Ok(png) => Some(png),
+                Err(error) => {
+                    let under = base.map(|base| &base.raw_colormaps);
+                    restore(&mut raw_colormaps, under, &path, error)?
+                }
+            };
+            if let Some(png) = png {
+                decoded_colormaps.insert(path, png);
+            }
+        }
+
+        let mut gui_images = decode_gui_textures(&mut raw_gui, base.map(|base| &base.raw_gui))?;
         gui_images.extend(decode_tile_textures(&files)?);
         let atlas = build_atlas(textures, &files)?;
         let colormaps = decode_colormaps(&mut decoded_colormaps)?;
         let gui_atlas = pack_gui_atlas(gui_images);
-        let glint = raw_glint
+        let mut glint = raw_glint
             .as_deref()
-            .map(|bytes| DecodedPng::decode(GLINT_PATH, bytes))
-            .transpose()?
-            .map(|png| GlintTexture {
-                width: png.width,
-                height: png.height,
-                pixels: png.pixels,
-            });
+            .map(|bytes| DecodedPng::decode(GLINT_PATH, bytes));
+        if let (Some(Err(error)), Some(base)) = (&glint, base) {
+            tracing::warn!(path = GLINT_PATH, %error, "ignoring an invalid pack image");
+            raw_glint.clone_from(&base.raw_glint);
+            glint = raw_glint
+                .as_deref()
+                .map(|bytes| DecodedPng::decode(GLINT_PATH, bytes));
+        }
+        let glint = glint.transpose()?.map(|png| GlintTexture {
+            width: png.width,
+            height: png.height,
+            pixels: png.pixels,
+        });
         Ok(Self {
             files,
             raw_colormaps,
@@ -573,6 +611,7 @@ impl GuiAtlas {
             UNKNOWN_SERVER_PATH,
             UNKNOWN_PACK_PATH,
             DEFAULT_PACK_PATH,
+            SIGN_PATH,
         ])?;
         let mut raw_gui = BTreeMap::new();
         let mut tiles = BTreeMap::new();
@@ -583,7 +622,7 @@ impl GuiAtlas {
                 tiles.insert(path, bytes);
             }
         }
-        let mut gui_images = decode_gui_textures(&raw_gui)?;
+        let mut gui_images = decode_gui_textures(&mut raw_gui, None)?;
         gui_images.extend(decode_tile_textures(&tiles)?);
         Ok(pack_gui_atlas(gui_images))
     }
@@ -639,6 +678,75 @@ fn is_texture_metadata(path: &str) -> bool {
         && (path.starts_with(BLOCK_TEXTURES_PREFIX) || path.starts_with(ITEM_TEXTURES_PREFIX))
 }
 
+/// The pack-feature folders that may hold connected-texture tiles.
+const CTM_FOLDERS: [&str; 2] = ["assets/minecraft/optifine/", "assets/minecraft/mcpatcher/"];
+
+/// Where a connected-texture tile PNG joins the block textures: a pack file
+/// `optifine/ctm/glass/0.png` (or `mcpatcher/`) becomes the block texture
+/// `textures/blocks/ctm/glass/0.png`, so it gets the atlas key
+/// `blocks/ctm/glass/0` that the CTM rules name (ADR-0089). `None` for any
+/// other path. Within one pack `optifine/` wins over `mcpatcher/` because the
+/// map is sorted and the later insert replaces the earlier one.
+fn ctm_tile_path(path: &str) -> Option<String> {
+    let relative = CTM_FOLDERS
+        .iter()
+        .find_map(|folder| path.strip_prefix(folder))?;
+    (relative.starts_with("ctm/") && relative.ends_with(".png"))
+        .then(|| format!("{BLOCK_TEXTURES_PREFIX}{relative}"))
+}
+
+/// Keeps the atlas within `max_layers`: when the block and item textures plus
+/// the missing-texture layer would not fit, whole CTM tile folders
+/// (`textures/blocks/ctm/<folder>/`) are dropped, last in path order first,
+/// until they do. The CTM rules whose tiles are gone are dropped by the
+/// mesher, so only those blocks lose their connected textures; without this,
+/// a pack with many tiles (an HD pack with 800+) would lose every texture.
+fn drop_ctm_tiles_over_budget(files: &mut BTreeMap<String, Vec<u8>>, max_layers: usize) {
+    let layers = 1 + files
+        .keys()
+        .filter(|path| texture_key(path).is_some())
+        .count();
+    let mut excess = layers.saturating_sub(max_layers);
+    if excess == 0 {
+        return;
+    }
+    let ctm_prefix = format!("{BLOCK_TEXTURES_PREFIX}ctm/");
+    let mut folders: BTreeMap<String, usize> = BTreeMap::new();
+    for path in files.keys().filter(|path| path.ends_with(".png")) {
+        if let Some((folder, _)) = path
+            .strip_prefix(&ctm_prefix)
+            .and_then(|rest| rest.rsplit_once('/'))
+        {
+            *folders.entry(folder.to_string()).or_default() += 1;
+        }
+    }
+    let mut dropped = Vec::new();
+    for (folder, count) in folders.iter().rev() {
+        if excess == 0 {
+            break;
+        }
+        dropped.push(folder.clone());
+        excess = excess.saturating_sub(*count);
+    }
+    files.retain(|path, _| {
+        path.strip_prefix(&ctm_prefix)
+            .and_then(|rest| rest.rsplit_once('/'))
+            .is_none_or(|(folder, _)| !dropped.contains(&folder.to_string()))
+    });
+    tracing::warn!(
+        layers,
+        max_layers,
+        folders = ?dropped,
+        "too many textures for one block atlas; these connected-texture folders are left out"
+    );
+    if excess > 0 {
+        tracing::warn!(
+            excess,
+            "the atlas is still over its limit without connected textures"
+        );
+    }
+}
+
 /// The atlas key of a block or item PNG, or `None` for any other path.
 fn texture_key(path: &str) -> Option<String> {
     if !path.starts_with(BLOCK_TEXTURES_PREFIX) && !path.starts_with(ITEM_TEXTURES_PREFIX) {
@@ -660,17 +768,22 @@ const UNKNOWN_PACK_PATH: &str = "assets/minecraft/textures/misc/unknown_pack.png
 /// The `pack.png` at the root of the client jar: the icon of the built-in
 /// "Default" pack (`DefaultResourcePack.getPackImage`).
 const DEFAULT_PACK_PATH: &str = "pack.png";
+/// The sign texture, which the sign editor draws flat in the GUI
+/// (`GuiEditSign` renders the sign model facing the screen).
+const SIGN_PATH: &str = "assets/minecraft/textures/entity/sign.png";
 
 /// The textures outside `textures/gui/` that the GUI atlas holds anyway, with
 /// their region names.
-const EXTRA_GUI_TEXTURES: [(&str, &str); 3] = [
+const EXTRA_GUI_TEXTURES: [(&str, &str); 4] = [
     (UNKNOWN_SERVER_PATH, "misc/unknown_server"),
     (UNKNOWN_PACK_PATH, "misc/unknown_pack"),
     (DEFAULT_PACK_PATH, "misc/default_pack"),
+    (SIGN_PATH, "entity/sign"),
 ];
 
 /// True for a GUI texture PNG (container backgrounds, widgets, icons) or one
-/// of the [`EXTRA_GUI_TEXTURES`] (the default server and pack icons).
+/// of the [`EXTRA_GUI_TEXTURES`] (the default server and pack icons, the
+/// sign).
 fn is_gui_texture(path: &str) -> bool {
     (path.starts_with(GUI_TEXTURES_PREFIX) && path.ends_with(".png"))
         || EXTRA_GUI_TEXTURES.iter().any(|(extra, _)| *extra == path)
@@ -729,56 +842,103 @@ fn decode_tile_textures(files: &BTreeMap<String, Vec<u8>>) -> AssetsResult<Vec<G
     Ok(images)
 }
 
-/// Decodes all GUI PNGs into images ready for atlas packing.
-fn decode_gui_textures(raw: &BTreeMap<String, Vec<u8>>) -> AssetsResult<Vec<GuiImage>> {
-    let named: Vec<_> = raw
-        .iter()
-        .filter_map(|(path, bytes)| Some((gui_texture_name(path)?, path, bytes)))
+/// Decodes all GUI PNGs into images ready for atlas packing. One that does
+/// not decode gives way to the one of `base`, see [`restore`].
+fn decode_gui_textures(
+    raw: &mut BTreeMap<String, Vec<u8>>,
+    base: Option<&BTreeMap<String, Vec<u8>>>,
+) -> AssetsResult<Vec<GuiImage>> {
+    let paths: Vec<String> = raw
+        .keys()
+        .filter(|path| gui_texture_name(path).is_some())
+        .cloned()
         .collect();
-    decode_in_parallel(&named, |(name, path, bytes)| {
-        let decoded = DecodedPng::decode(path, bytes)?;
-        Ok(GuiImage {
-            name: name.clone(),
-            width: decoded.width,
-            height: decoded.height,
-            pixels: decoded.pixels,
-        })
+    let decoded = decode_all(paths.iter().map(|path| (path, &raw[path])));
+    let mut images = Vec::with_capacity(paths.len());
+    for (path, result) in paths.into_iter().zip(decoded) {
+        let decoded = match result {
+            Ok(decoded) => decoded,
+            Err(error) => match restore(raw, base, &path, error)? {
+                Some(decoded) => decoded,
+                None => continue,
+            },
+        };
+        if let Some(name) = gui_texture_name(&path) {
+            images.push(GuiImage {
+                name,
+                width: decoded.width,
+                height: decoded.height,
+                pixels: decoded.pixels,
+            });
+        }
+    }
+    Ok(images)
+}
+
+/// Decodes every `(path, bytes)` image on all cores, in input order. A
+/// decoder that panics is an error of its images, not of the caller.
+fn decode_all<'a>(
+    items: impl Iterator<Item = (&'a String, &'a Vec<u8>)>,
+) -> Vec<AssetsResult<DecodedPng>> {
+    let items: Vec<(&String, &Vec<u8>)> = items.collect();
+    let decode = |chunk: &[(&String, &Vec<u8>)]| -> Vec<AssetsResult<DecodedPng>> {
+        chunk
+            .iter()
+            .map(|(path, bytes)| DecodedPng::decode(path, bytes))
+            .collect()
+    };
+    let threads = std::thread::available_parallelism().map_or(1, usize::from);
+    if threads <= 1 || items.len() < 8 {
+        return decode(&items);
+    }
+    let per_thread = items.len().div_ceil(threads).max(1);
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = items
+            .chunks(per_thread)
+            .map(|chunk| (chunk, scope.spawn(move || decode(chunk))))
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|(chunk, handle)| {
+                handle.join().unwrap_or_else(|_| {
+                    chunk
+                        .iter()
+                        .map(|(path, _)| Err(image_error(path, "the PNG decoder panicked")))
+                        .collect()
+                })
+            })
+            .collect()
     })
 }
 
-/// Runs `decode` over `items` on all cores, keeping their order; the first
-/// error in item order wins, as in a sequential loop.
+/// What to do with the image `path` of `files` that failed with `error`.
 ///
-/// A 1.8 jar holds about a thousand PNGs to inflate, and a 32x or 64x pack
-/// many more pixels: one core spent most of the load on them.
-fn decode_in_parallel<T: Sync, R: Send>(
-    items: &[T],
-    decode: impl Fn(&T) -> AssetsResult<R> + Sync,
-) -> AssetsResult<Vec<R>> {
-    let threads = std::thread::available_parallelism()
-        .map_or(1, std::num::NonZeroUsize::get)
-        .min(8);
-    if threads <= 1 || items.len() < 32 {
-        return items.iter().map(&decode).collect();
-    }
-    let chunk = items.len().div_ceil(threads);
-    let decode = &decode;
-    std::thread::scope(|scope| {
-        let workers: Vec<_> = items
-            .chunks(chunk)
-            .map(|part| scope.spawn(move || part.iter().map(decode).collect::<Vec<_>>()))
-            .collect();
-        let mut out = Vec::with_capacity(items.len());
-        for worker in workers {
-            let results = worker
-                .join()
-                .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
-            for result in results {
-                out.push(result?);
-            }
+/// Without `base` the error stands. With it, the image of a pack gives way
+/// to the one of `base` (decoded and returned), or is dropped when `base` has
+/// none (`None`); either way a warning names the file.
+fn restore(
+    files: &mut BTreeMap<String, Vec<u8>>,
+    base: Option<&BTreeMap<String, Vec<u8>>>,
+    path: &str,
+    error: crate::AssetsError,
+) -> AssetsResult<Option<DecodedPng>> {
+    let Some(base) = base else {
+        return Err(error);
+    };
+    tracing::warn!(path, %error, "ignoring an invalid pack image");
+    match base
+        .get(path)
+        .filter(|bytes| files.get(path) != Some(*bytes))
+    {
+        Some(bytes) => {
+            files.insert(path.to_string(), bytes.clone());
+            DecodedPng::decode(path, bytes).map(Some)
         }
-        Ok(out)
-    })
+        None => {
+            files.remove(path);
+            Ok(None)
+        }
+    }
 }
 
 /// Builds the deterministic atlas from decoded textures.
@@ -1036,6 +1196,53 @@ mod tests {
         );
     }
 
+    #[test]
+    fn ctm_tiles_map_to_block_texture_paths() {
+        assert_eq!(
+            ctm_tile_path("assets/minecraft/optifine/ctm/glass/0.png").as_deref(),
+            Some("assets/minecraft/textures/blocks/ctm/glass/0.png")
+        );
+        assert_eq!(
+            ctm_tile_path("assets/minecraft/mcpatcher/ctm/glass/0.png").as_deref(),
+            Some("assets/minecraft/textures/blocks/ctm/glass/0.png")
+        );
+        assert_eq!(
+            texture_key("assets/minecraft/textures/blocks/ctm/glass/0.png").as_deref(),
+            Some("blocks/ctm/glass/0")
+        );
+        assert_eq!(
+            ctm_tile_path("assets/minecraft/optifine/ctm/glass.properties"),
+            None
+        );
+        assert_eq!(
+            ctm_tile_path("assets/minecraft/optifine/sky/world0/sky1.png"),
+            None
+        );
+    }
+
+    #[test]
+    fn ctm_folders_are_dropped_until_the_atlas_fits() {
+        let png = vec![0u8];
+        let mut files: BTreeMap<String, Vec<u8>> = [
+            "assets/minecraft/textures/blocks/stone.png",
+            "assets/minecraft/textures/blocks/ctm/glass/0.png",
+            "assets/minecraft/textures/blocks/ctm/glass/1.png",
+            "assets/minecraft/textures/blocks/ctm/sandstone/0.png",
+            "assets/minecraft/textures/blocks/ctm/sandstone/1.png",
+        ]
+        .into_iter()
+        .map(|path| (path.to_string(), png.clone()))
+        .collect();
+        // 1 missing + 5 textures = 6 layers; a budget of 4 drops one folder.
+        drop_ctm_tiles_over_budget(&mut files, 4);
+        assert!(files.contains_key("assets/minecraft/textures/blocks/stone.png"));
+        assert!(files.contains_key("assets/minecraft/textures/blocks/ctm/glass/1.png"));
+        assert!(!files.contains_key("assets/minecraft/textures/blocks/ctm/sandstone/0.png"));
+        let before = files.clone();
+        drop_ctm_tiles_over_budget(&mut files, 64);
+        assert_eq!(files, before, "nothing dropped when it fits");
+    }
+
     fn png_bytes(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
         let mut encoder = png::Encoder::new(&mut out, width, height);
@@ -1055,6 +1262,7 @@ mod tests {
             BTreeMap::new(),
             BTreeMap::new(),
             Some(bytes),
+            None,
         )
         .expect("build");
         let glint = resources.glint_texture().expect("glint");
@@ -1065,6 +1273,7 @@ mod tests {
             BTreeMap::new(),
             BTreeMap::new(),
             BTreeMap::new(),
+            None,
             None,
         )
         .expect("build");
@@ -1078,6 +1287,7 @@ mod tests {
             BTreeMap::new(),
             BTreeMap::new(),
             Some(vec![1, 2, 3]),
+            None,
         );
         assert!(matches!(result, Err(AssetsError::Image { .. })));
     }
@@ -1124,6 +1334,9 @@ mod tests {
             gui_texture_name(DEFAULT_PACK_PATH).as_deref(),
             Some("misc/default_pack")
         );
+        // The sign editor draws the sign texture.
+        assert!(is_gui_texture(SIGN_PATH));
+        assert_eq!(gui_texture_name(SIGN_PATH).as_deref(), Some("entity/sign"));
         assert!(!is_gui_texture("pack.png.mcmeta"));
         assert!(!is_gui_texture("assets/pack.png"));
         assert!(!is_gui_texture("assets/minecraft/textures/misc/shadow.png"));

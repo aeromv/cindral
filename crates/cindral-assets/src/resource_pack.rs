@@ -38,6 +38,10 @@ const PACK_MCMETA: &str = "pack.mcmeta";
 /// Standard file name for resource pack preview icon.
 const PACK_PNG: &str = "pack.png";
 
+/// The most uncompressed bytes a zipped pack may hold. The reference has no
+/// such limit; the largest 512x packs stay well under it.
+const MAX_PACK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
 /// Metadata parsed from a resource pack's `pack.mcmeta` file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackMetadata {
@@ -213,6 +217,7 @@ impl ResourcePack {
         let mut files = BTreeMap::new();
         let mut metadata = None;
         let mut icon = None;
+        let mut total = 0_u64;
 
         for entry in archive.entries() {
             let normalized = normalize_virtual_path(&entry.name);
@@ -226,8 +231,25 @@ impl ResourcePack {
             } else if normalized == PACK_PNG {
                 icon = archive.read(entry).ok();
             } else if normalized.starts_with(ASSETS_PREFIX) {
-                if let Ok(bytes) = archive.read(entry) {
-                    files.insert(normalized, bytes);
+                // Checked on the declared sizes, before anything is inflated:
+                // a small archive (a server pack) must not fill the memory.
+                total = total.saturating_add(entry.uncompressed_size);
+                if total > MAX_PACK_BYTES {
+                    return Err(AssetsError::Pack {
+                        name: id.to_string(),
+                        reason: format!(
+                            "the pack holds more than {} MiB of files",
+                            MAX_PACK_BYTES / (1024 * 1024)
+                        ),
+                    });
+                }
+                match archive.read(entry) {
+                    Ok(bytes) => {
+                        files.insert(normalized, bytes);
+                    }
+                    Err(error) => {
+                        tracing::warn!(pack = id, %error, "skipping an unreadable pack entry");
+                    }
                 }
             }
         }
@@ -285,6 +307,14 @@ impl ResourcePack {
     pub fn files(&self) -> &BTreeMap<String, Vec<u8>> {
         &self.files
     }
+
+    /// Consumes the pack and returns its game asset files, keyed by virtual
+    /// path. [`PackFiles`](crate::PackFiles) uses it to keep a subset without
+    /// copying the bytes.
+    #[must_use]
+    pub fn into_files(self) -> BTreeMap<String, Vec<u8>> {
+        self.files
+    }
 }
 
 /// Helper to recursively collect files from a directory into virtual paths.
@@ -302,12 +332,6 @@ fn collect_dir_files(
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            if path
-                .strip_prefix(root)
-                .is_ok_and(|relative| is_unused_dir(&relative.to_string_lossy().replace('\\', "/")))
-            {
-                continue;
-            }
             let _ = collect_dir_files(root, &path, files);
         } else if path.is_file() {
             if let Ok(relative) = path.strip_prefix(root) {
@@ -328,29 +352,9 @@ fn collect_dir_files(
     Ok(())
 }
 
-/// Returns true if `path` is an OS metadata or hidden file (e.g. `__MACOSX`,
-/// `.DS_Store`, `._*`), or lies in a folder the client never reads.
+/// Returns true if `path` is an OS metadata or hidden file (e.g. `__MACOSX`, `.DS_Store`, `._*`).
 fn is_ignored_path(path: &str) -> bool {
-    path.starts_with("__MACOSX/")
-        || path.split('/').any(|segment| segment.starts_with('.'))
-        || is_unused_dir(path)
-}
-
-/// The folders of OptiFine and MCPatcher features (connected textures, custom
-/// skies, fonts, post shaders) the client does not implement. PvP packs ship
-/// hundreds of files there; reading them only slowed the start.
-const UNUSED_DIRS: [&str; 3] = [
-    "assets/minecraft/mcpatcher",
-    "assets/minecraft/optifine",
-    "assets/minecraft/shaders",
-];
-
-/// Whether `path` is one of [`UNUSED_DIRS`] or lies inside one.
-fn is_unused_dir(path: &str) -> bool {
-    UNUSED_DIRS.iter().any(|dir| {
-        path.strip_prefix(dir)
-            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
-    })
+    path.starts_with("__MACOSX/") || path.split('/').any(|segment| segment.starts_with('.'))
 }
 
 /// Reads `files` (virtual path, disk path) on several threads. On Windows

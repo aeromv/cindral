@@ -11,6 +11,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::options::RENDER_DISTANCE;
+
 /// The acceptance camera views for `--block-demo`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DemoView {
@@ -98,17 +100,19 @@ options:
   --username NAME --uuid UUID --accessToken TOKEN
                       launcher session: log in to online-mode servers
                       (also CINDRAL_USERNAME, CINDRAL_UUID, CINDRAL_ACCESS_TOKEN)
-  --view-distance N   requested chunk view distance, 2-16 (default: 8)
+  --view-distance N   requested chunk view distance, 2-32 (default: 8)
   --preset NAME       video preset low, medium, high or pvp; low suits a machine
                       without a graphics card, pvp a fast sharp picture at
-                      render distance 4 (also used by --bench-scene)
+                      render distance 4
   --screenshot PATH   render one offscreen PNG to PATH instead of opening a window
   --collect-secs N    world collection time for screenshots (default: 8)
   --headless          run a scripted session without a window and print a report
   --play-secs N       duration of the headless session (default: 60)
   --script NAME       headless script: default (walk, break, place), idle, or
                       movement (the 60 s parity-harness script), or combat (the
-                      60 s combat script: strikes, a use, a jump strike)
+                      60 s combat script: strikes, a use, a jump strike), or e1 (the
+                      tick-driven E.2 parity scenario; needs --state-log)
+  --state-log FILE    write the per-tick player state CSV of the e1 script
   --handshake-host H  address sent in the handshake instead of <host> (to record a
                       session with cindral-packet-logger on a public server)
   --chat MESSAGE      chat line the headless session sends when it is placed
@@ -118,7 +122,9 @@ options:
                       action bar) and the options screens from scripted server
                       packets; no server or GPU unless --screenshot is given
   --hud-view NAME     scene of --hud-demo: overview, tab, chat, menu, options,
-                      controls, chat-options, title, servers (default: overview)
+                      controls, chat-options, title, servers, options-ember, options-amethyst,
+                      sign, sign-wall
+                      (default: overview)
   --synthetic-panorama  with --hud-demo --hud-view title: draw generated gradient
                       faces instead of the panorama of the user's jar
   --block-demo        mesh and report the M5/M6 acceptance blocks from the official
@@ -145,26 +151,28 @@ options:
                       Zombie, Cow, Item); no server or GPU unless --screenshot is given
   --mob NAME          render a single mob by name (e.g. creeper, zombie, cow, or 'list')
   --dump-mobs DIR     render each mob individually 1-by-1 to PNG images in DIR
-  --perf-log PATH     write fps, CPU per stage and GPU per group to PATH once a
-                      second while playing (to see where a real game's frames go)
   --resource-pack PATH path to a resource pack directory or .zip (repeatable)
   --setup-assets      download and verify official 1.8.8 assets then exit
   --no-audio          start without the sound engine (no device, no thread)
   --audio-probe       play a few sound events on the system device and exit
+  --profile           enable runtime profiling and per-frame allocation tracking at start
   --time N            world time in ticks (signed; default: 6000 noon)
   --demo-view NAME    acceptance camera: overview, day, night, cave, transparency,
                       back, closeup, walk-cycle, mobs (default: overview)
+  --backend NAME      graphics backend: dx12, vulkan, or all (default: all)
   --width N           framebuffer width (default: 1280)
   --height N          framebuffer height (default: 720)
   --help, -h          print this help";
 
 /// The scenes of `--hud-demo`.
-pub const HUD_VIEWS: [&str; 24] = [
+pub const HUD_VIEWS: [&str; 30] = [
     "overview",
     "tab",
     "chat",
     "menu",
     "options",
+    "options-ember",
+    "options-amethyst",
     "video",
     "controls",
     "chat-options",
@@ -184,10 +192,16 @@ pub const HUD_VIEWS: [&str; 24] = [
     "achievements",
     "mods",
     "mods_list",
+    "hud-editor",
+    "hud-editor-list",
+    "sign",
+    "sign-wall",
 ];
 
 /// The scripted sessions the headless mode knows.
-pub const SCRIPTS: [&str; 4] = ["default", "idle", "movement", "combat"];
+pub const SCRIPTS: [&str; 8] = [
+    "default", "idle", "movement", "combat", "e1", "e2", "e3", "e4",
+];
 
 /// The top-level mode selected by the parsed arguments.
 ///
@@ -242,6 +256,8 @@ pub struct Args {
     pub play: Duration,
     /// The scripted session of the headless mode.
     pub script: String,
+    /// Where the `e1` script writes its per-tick state log (phase E.2).
+    pub state_log: Option<PathBuf>,
     /// A chat line the headless session sends once the player is placed.
     pub chat: Option<String>,
     /// The address written in the `Handshake`, when it differs from `host`
@@ -259,6 +275,9 @@ pub struct Args {
     pub block_demo: bool,
     /// Whether the reproducible benchmark scene is requested (F2-0c).
     pub bench_scene: bool,
+    /// Specific benchmark scenario for competitive performance testing:
+    /// "empty", "chunks8", "chunks16", "chunks24", "entities50", "entities100", "entities200", "pvp", "particles", "mixed".
+    pub bench_scenario: Option<String>,
     /// X and Z, in blocks, of the centre of the benchmark scene.
     pub bench_origin: i32,
     /// Measured frames of the benchmark scene.
@@ -286,14 +305,14 @@ pub struct Args {
     pub mob: Option<String>,
     /// Directory to export individual PNG screenshots of all mobs 1 by 1.
     pub dump_mobs: Option<PathBuf>,
-    /// Where the window writes its once-a-second performance log.
-    pub perf_log: Option<PathBuf>,
     /// Whether asset setup/download was explicitly requested.
     pub setup_assets: bool,
     /// Whether the sound engine stays off (`--no-audio`).
     pub no_audio: bool,
     /// Whether the audio probe was requested (`--audio-probe`).
     pub audio_probe: bool,
+    /// Whether runtime profiling and allocation tracking start enabled (`--profile`).
+    pub profile: bool,
     /// Active resource pack paths, layered in argument order.
     pub resource_packs: Vec<PathBuf>,
     /// World time in ticks (signed; default: 6000 noon). Only used by `--block-demo`.
@@ -302,6 +321,8 @@ pub struct Args {
     pub demo_view: DemoView,
     /// The video preset of `--preset`, applied over the saved options.
     pub preset: Option<crate::options::VideoPreset>,
+    /// Explicitly requested graphics backend ("dx12", "vulkan", "all").
+    pub backend: Option<String>,
     /// Framebuffer width.
     pub width: u32,
     /// Framebuffer height.
@@ -368,6 +389,7 @@ impl Args {
         let mut play_secs = 60.0_f64;
         let mut script = "default".to_string();
         let mut chat = None;
+        let mut state_log = None;
         let mut handshake_host = None;
         let mut ui_demo = false;
         let mut hud_demo = false;
@@ -375,6 +397,7 @@ impl Args {
         let mut hud_view = HUD_VIEWS[0].to_string();
         let mut block_demo = false;
         let mut bench_scene = false;
+        let mut bench_scenario = None;
         let mut bench_origin = 0_i32;
         let mut bench_frames = 600_u32;
         let mut bench_no_cave_culling = false;
@@ -388,14 +411,15 @@ impl Args {
         let mut entity_demo = false;
         let mut mob = None;
         let mut dump_mobs = None;
-        let mut perf_log = None;
         let mut setup_assets = false;
         let mut no_audio = false;
         let mut audio_probe = false;
+        let mut profile = false;
         let mut resource_packs = Vec::new();
         let mut time = 6000_i64;
         let mut demo_view = DemoView::Overview;
         let mut preset = None;
+        let mut backend = None;
         let mut width = 1280_u32;
         let mut height = 720_u32;
 
@@ -445,6 +469,10 @@ impl Args {
                     handshake_host = Some(words.get(index + 1).ok_or_else(help)?.clone());
                     index += 2;
                 }
+                "--state-log" => {
+                    state_log = Some(PathBuf::from(words.get(index + 1).ok_or_else(help)?));
+                    index += 2;
+                }
                 "--chat" => {
                     let value = words.get(index + 1).ok_or_else(help)?;
                     chat = Some(value.clone());
@@ -480,6 +508,12 @@ impl Args {
                 "--bench-scene" => {
                     bench_scene = true;
                     index += 1;
+                }
+                "--bench-scenario" => {
+                    let value = words.get(index + 1).ok_or_else(help)?;
+                    bench_scenario = Some(value.clone());
+                    bench_scene = true;
+                    index += 2;
                 }
                 "--bench-origin" => {
                     bench_origin = parse_number(words.get(index + 1), "--bench-origin")?;
@@ -542,14 +576,6 @@ impl Args {
                     dump_mobs = Some(PathBuf::from(value));
                     index += 2;
                 }
-                "--perf-log" => {
-                    let value = words.get(index + 1).ok_or_else(help)?;
-                    if value.is_empty() {
-                        return Err(format!("--perf-log needs a file path\n{USAGE}"));
-                    }
-                    perf_log = Some(PathBuf::from(value));
-                    index += 2;
-                }
                 "--setup-assets" => {
                     setup_assets = true;
                     index += 1;
@@ -560,6 +586,10 @@ impl Args {
                 }
                 "--audio-probe" => {
                     audio_probe = true;
+                    index += 1;
+                }
+                "--profile" => {
+                    profile = true;
                     index += 1;
                 }
                 "--resource-pack" => {
@@ -594,6 +624,21 @@ impl Args {
                     height = parse_number(words.get(index + 1), "--height")?;
                     index += 2;
                 }
+                "--backend" => {
+                    let value = words.get(index + 1).ok_or_else(help)?;
+                    let lower = value.to_ascii_lowercase();
+                    match lower.as_str() {
+                        "dx12" | "directx12" | "vulkan" | "vk" | "all" | "auto" => {
+                            backend = Some(lower);
+                        }
+                        other => {
+                            return Err(format!(
+                                "--backend must be one of 'dx12', 'vulkan', 'all'; got {other:?}\n{USAGE}"
+                            ));
+                        }
+                    }
+                    index += 2;
+                }
                 other if host.is_none() => {
                     host = Some(other.to_string());
                     index += 1;
@@ -612,9 +657,11 @@ impl Args {
         if port == Some(0) {
             return Err(format!("port must be 1-65535\n{USAGE}"));
         }
-        if !(2..=16).contains(&view_distance) {
+        if !RENDER_DISTANCE.contains(&view_distance) {
             return Err(format!(
-                "--view-distance must be 2-16, got {view_distance}\n{USAGE}"
+                "--view-distance must be {}-{}, got {view_distance}\n{USAGE}",
+                RENDER_DISTANCE.start(),
+                RENDER_DISTANCE.end()
             ));
         }
         if !(0.2..=300.0).contains(&collect_secs) {
@@ -674,6 +721,7 @@ impl Args {
             headless,
             play: Duration::from_secs_f64(play_secs),
             script,
+            state_log,
             chat,
             handshake_host,
             ui_demo,
@@ -682,6 +730,7 @@ impl Args {
             synthetic_panorama,
             block_demo,
             bench_scene,
+            bench_scenario,
             bench_origin,
             bench_frames,
             bench_no_cave_culling,
@@ -695,14 +744,17 @@ impl Args {
             entity_demo,
             mob,
             dump_mobs,
-            perf_log,
             setup_assets,
             no_audio,
             audio_probe,
+            profile,
             resource_packs,
             time,
             demo_view,
             preset,
+            backend: backend
+                .or_else(|| std::env::var("CINDRAL_BACKEND").ok())
+                .or_else(|| std::env::var("WGPU_BACKEND").ok()),
             width,
             height,
         })
@@ -976,10 +1028,20 @@ mod tests {
     }
 
     #[test]
+    fn the_usage_names_the_range_of_the_render_distance_option() {
+        let range = format!("{}-{}", RENDER_DISTANCE.start(), RENDER_DISTANCE.end());
+        assert!(USAGE.contains(&format!("chunk view distance, {range}")));
+        let top = RENDER_DISTANCE.end().to_string();
+        assert!(Args::parse(&words(&["host", "25565", "--view-distance", &top])).is_ok());
+    }
+
+    #[test]
     fn rejects_bad_values() {
         assert!(Args::parse(&words(&["host", "0"])).is_err());
         assert!(Args::parse(&words(&["host", "70000"])).is_err());
         assert!(Args::parse(&words(&["host", "25565", "--view-distance", "1"])).is_err());
+        let past_the_end = (RENDER_DISTANCE.end() + 1).to_string();
+        assert!(Args::parse(&words(&["host", "25565", "--view-distance", &past_the_end])).is_err());
         assert!(Args::parse(&words(&["host", "25565", "--width", "0"])).is_err());
         assert!(Args::parse(&words(&["host", "25565", "--unknown"])).is_err());
         assert!(Args::parse(&words(&["host", "25565", "--name"])).is_err());
@@ -1119,5 +1181,14 @@ mod tests {
         );
         assert!(Args::parse(&words(&["--bench-scene", "--bench-frames", "0"])).is_err());
         assert!(Args::parse(&words(&["--bench-scene", "--bench-origin", "30000000"])).is_err());
+    }
+
+    #[test]
+    fn profile_flag_parses_and_defaults_to_false() {
+        let off = Args::parse(&words(&[])).expect("default");
+        assert!(!off.profile);
+        let on = Args::parse(&words(&["--profile"])).expect("profile");
+        assert!(on.profile);
+        assert_eq!(on.mode(), Mode::Windowed);
     }
 }

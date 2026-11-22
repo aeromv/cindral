@@ -18,11 +18,170 @@
 //! [`BlockSource`] on demand and the solver only ever holds a handful of
 //! boxes on the stack.
 
-use cindral_world::BlockPos;
+use cindral_world::{BlockPos, BlockState};
 use glam::DVec3;
 
+use crate::piston::{MovingBlock, MovingBlocks};
 pub use crate::shapes::Aabb;
 use crate::shapes::{shape_of, BlockSource};
+
+/// The walls of the world border on X and Z (MCP `WorldBorder.minX`, `minZ`,
+/// `maxX`, `maxZ`, already clamped to the portal boundary).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BorderBounds {
+    /// The west wall.
+    pub min_x: f64,
+    /// The north wall.
+    pub min_z: f64,
+    /// The east wall.
+    pub max_x: f64,
+    /// The south wall.
+    pub max_z: f64,
+}
+
+impl BorderBounds {
+    /// Whether any part of the block column `(x, z)` is inside
+    /// (MCP `WorldBorder.contains(BlockPos)`).
+    #[must_use]
+    pub fn contains_block(&self, x: i32, z: i32) -> bool {
+        f64::from(x) + 1.0 > self.min_x
+            && f64::from(x) < self.max_x
+            && f64::from(z) + 1.0 > self.min_z
+            && f64::from(z) < self.max_z
+    }
+
+    /// Whether `(x, z)` is inside the walls moved outwards by `margin`
+    /// (MCP `World.isInsideBorder`, which uses 1 or -1).
+    #[must_use]
+    pub fn contains_point(&self, x: f64, z: f64, margin: f64) -> bool {
+        x > self.min_x - margin
+            && x < self.max_x + margin
+            && z > self.min_z - margin
+            && z < self.max_z + margin
+    }
+}
+
+/// A block source where everything beyond the world border is stone, for
+/// the collision of an entity inside the border (MCP
+/// `World.getCollidingBoundingBoxes`: `Blocks.stone` replaces the block of
+/// any position the border does not contain).
+pub struct Bordered<'a, S: BlockSource + ?Sized> {
+    /// The real blocks.
+    pub world: &'a S,
+    /// The border.
+    pub walls: BorderBounds,
+}
+
+/// The stone the border is made of for the collisions.
+const BORDER_STONE: BlockState = BlockState::new(1, 0);
+
+impl<S: BlockSource + ?Sized> BlockSource for Bordered<'_, S> {
+    fn block(&self, x: i32, y: i32, z: i32) -> BlockState {
+        if self.walls.contains_block(x, z) {
+            self.world.block(x, y, z)
+        } else {
+            BORDER_STONE
+        }
+    }
+
+    fn is_column_loaded(&self, x: i32, z: i32) -> bool {
+        self.world.is_column_loaded(x, z)
+    }
+
+    fn for_each_entity_box(&self, area: &Aabb, f: &mut dyn FnMut(&Aabb)) {
+        self.world.for_each_entity_box(area, f);
+    }
+
+    fn moving_block(&self, x: i32, y: i32, z: i32) -> Option<MovingBlock> {
+        self.world.moving_block(x, y, z)
+    }
+}
+
+/// A block source plus the collision boxes of the solid entities around
+/// the player (see [`boat_box`]).
+pub struct WithEntities<'a, S: BlockSource + ?Sized> {
+    /// The blocks.
+    pub world: &'a S,
+    /// The entity boxes, in world space.
+    pub boxes: &'a [Aabb],
+}
+
+impl<S: BlockSource + ?Sized> BlockSource for WithEntities<'_, S> {
+    fn block(&self, x: i32, y: i32, z: i32) -> BlockState {
+        self.world.block(x, y, z)
+    }
+
+    fn is_column_loaded(&self, x: i32, z: i32) -> bool {
+        self.world.is_column_loaded(x, z)
+    }
+
+    fn for_each_entity_box(&self, area: &Aabb, f: &mut dyn FnMut(&Aabb)) {
+        self.world.for_each_entity_box(area, f);
+        for obstacle in self
+            .boxes
+            .iter()
+            .filter(|obstacle| obstacle.intersects(area))
+        {
+            f(obstacle);
+        }
+    }
+
+    fn moving_block(&self, x: i32, y: i32, z: i32) -> Option<MovingBlock> {
+        self.world.moving_block(x, y, z)
+    }
+}
+
+/// A block source plus the blocks the pistons are moving (the client's
+/// `TileEntityPiston`s), whose `piston_extension` blocks collide with the
+/// moved block (see [`BlockSource::moving_block`]).
+pub struct WithMovingBlocks<'a, S: BlockSource + ?Sized> {
+    /// The blocks.
+    pub world: &'a S,
+    /// The blocks in flight.
+    pub moving: &'a MovingBlocks,
+}
+
+impl<S: BlockSource + ?Sized> BlockSource for WithMovingBlocks<'_, S> {
+    fn block(&self, x: i32, y: i32, z: i32) -> BlockState {
+        self.world.block(x, y, z)
+    }
+
+    fn is_column_loaded(&self, x: i32, z: i32) -> bool {
+        self.world.is_column_loaded(x, z)
+    }
+
+    fn for_each_entity_box(&self, area: &Aabb, f: &mut dyn FnMut(&Aabb)) {
+        self.world.for_each_entity_box(area, f);
+    }
+
+    fn moving_block(&self, x: i32, y: i32, z: i32) -> Option<MovingBlock> {
+        self.moving.at([x, y, z]).copied()
+    }
+}
+
+/// The width of a boat (MCP `EntityBoat`: `setSize(1.5F, 0.6F)`).
+const BOAT_WIDTH: f32 = 1.5;
+
+/// The height of a boat.
+const BOAT_HEIGHT: f32 = 0.6;
+
+/// The collision box of a boat whose feet are at `position`
+/// (MCP `EntityBoat.getCollisionBoundingBox` is its bounding box, built by
+/// `Entity.setPosition` from the `float` size). Boats are the only entities
+/// a player collides with: a minecart's `getCollisionBoundingBox` is `null`,
+/// and so is the player's own `getCollisionBox`.
+#[must_use]
+pub fn boat_box(position: DVec3) -> Aabb {
+    let half = f64::from(BOAT_WIDTH / 2.0);
+    Aabb::new(
+        DVec3::new(position.x - half, position.y, position.z - half),
+        DVec3::new(
+            position.x + half,
+            position.y + f64::from(BOAT_HEIGHT),
+            position.z + half,
+        ),
+    )
+}
 
 /// The highest world coordinate that holds blocks in a 1.8 world.
 const MAX_BLOCK_Y: i32 = 255;
@@ -58,6 +217,9 @@ impl Default for MoveOptions {
 pub struct MoveResult {
     /// The movement that was actually applied.
     pub delta: DVec3,
+    /// The box after the move. Prefer it to `original.offset(delta)`: the
+    /// box went through several offsets, each with its own rounding.
+    pub bounds: Aabb,
     /// The X movement was blocked by a block.
     pub blocked_x: bool,
     /// The Z movement was blocked by a block.
@@ -172,6 +334,7 @@ pub fn move_entity<S: BlockSource + ?Sized>(
 
     MoveResult {
         delta: current.min - original.min,
+        bounds: current,
         blocked_x: requested.x != x,
         blocked_z: requested.z != z,
         blocked_horizontally: requested.x != x || requested.z != z,
@@ -355,6 +518,13 @@ fn for_each_collision_box<S: BlockSource + ?Sized>(
             }
         }
     }
+    // The solid entities come after the blocks (MCP
+    // `World.getCollidingBoundingBoxes`), kept when they meet the mask.
+    world.for_each_entity_box(mask, &mut |obstacle| {
+        if obstacle.intersects(mask) {
+            f(obstacle);
+        }
+    });
 }
 
 #[cfg(test)]
@@ -532,6 +702,65 @@ mod tests {
             MoveOptions::default(),
         );
         assert_eq!(walking.delta.x, 1.2);
+    }
+
+    /// Regression test: a fence beside glass grew an arm towards it, so a
+    /// player brushing past the fence was stopped by a box the server does
+    /// not have and the anti-cheat logged the mismatch.
+    #[test]
+    fn a_player_walks_past_a_fence_that_does_not_connect_to_glass() {
+        let world = TestBlocks::with(&[
+            (0, 0, 0, BlockState::new(85, 0)),
+            (1, 0, 0, BlockState::new(20, 0)),
+        ]);
+        // A box south of the fence, between its post (x < 0.625) and the
+        // glass (x > 1), in front of where the wrong east arm stood.
+        let player = Aabb::new(DVec3::new(0.7, 0.0, 1.0), DVec3::new(0.95, 1.8, 1.25));
+        let moved = move_entity(
+            player,
+            DVec3::new(0.0, 0.0, -0.5),
+            &world,
+            MoveOptions::default(),
+        );
+        assert_eq!(moved.delta.z, -0.5);
+        assert!(!moved.blocked_horizontally);
+    }
+
+    /// Regression test: a block in flight (a `piston_extension`) did not
+    /// block the player, who walked into it while the server stopped them.
+    #[test]
+    fn a_player_is_stopped_by_a_block_a_piston_is_pushing() {
+        let world = TestBlocks::with(&[(1, 0, 0, BlockState::new(36, 0))]);
+        let mut moving = MovingBlocks::default();
+        moving.push(MovingBlock {
+            pos: [1, 0, 0],
+            state: BlockState::new(1, 0),
+            direction: [0, 0, 1],
+            extending: true,
+            show_head: false,
+            progress: 1.0,
+            last_progress: 0.5,
+            light: cindral_world::LightLevel::default(),
+        });
+        let source = WithMovingBlocks {
+            world: &world,
+            moving: &moving,
+        };
+        let moved = move_entity(
+            player_box(0.0),
+            DVec3::new(1.0, 0.0, 0.0),
+            &source,
+            MoveOptions::default(),
+        );
+        assert_eq!(moved.delta.x, 0.7, "stopped at the face x = 1");
+        // Without the animation the extension block is empty.
+        let free = move_entity(
+            player_box(0.0),
+            DVec3::new(1.0, 0.0, 0.0),
+            &world,
+            MoveOptions::default(),
+        );
+        assert_eq!(free.delta.x, 1.0);
     }
 
     #[test]

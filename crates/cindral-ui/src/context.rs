@@ -27,6 +27,7 @@ use crate::geom::Rect;
 use crate::id::WidgetId;
 use crate::input::{InputEvent, Key, PointerButton, UiInput};
 use crate::menus::MenuArt;
+use crate::theme::Theme;
 
 /// What one widget reports after it has been drawn.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -92,11 +93,10 @@ pub struct Ui {
     button_presses: u32,
     /// The optional widgets sprite sheet used for skinning buttons and sliders.
     widgets_sheet: Option<SpriteSheet>,
-    /// Draw buttons, sliders and menu backgrounds in the Cindral style
-    /// instead of the resource pack textures.
-    modern_chrome: bool,
     /// The menu textures (dirt, title logo) of the user's client jar.
     menu_art: MenuArt,
+    /// How buttons, sliders and menu backgrounds are painted.
+    theme: Theme,
     /// Text a widget asked to put on the clipboard (Control+C or Control+X).
     clipboard: Option<String>,
 }
@@ -120,8 +120,8 @@ impl Ui {
             click_consumed: false,
             button_presses: 0,
             widgets_sheet: None,
-            modern_chrome: false,
             menu_art: MenuArt::default(),
+            theme: Theme::default(),
             clipboard: None,
         }
     }
@@ -277,21 +277,20 @@ impl Ui {
         self.widgets_sheet = sheet;
     }
 
-    /// Chooses the Cindral look (`true`) or the resource pack textures
-    /// (`false`, the default) for buttons, sliders and menu backgrounds.
-    pub fn set_modern_chrome(&mut self, modern: bool) {
-        self.modern_chrome = modern;
-    }
-
-    /// Whether buttons, sliders and menu backgrounds use the Cindral look.
-    #[must_use]
-    pub fn modern_chrome(&self) -> bool {
-        self.modern_chrome
-    }
-
     /// Sets the textures the menu screens draw as sprites.
     pub fn set_menu_art(&mut self, art: MenuArt) {
         self.menu_art = art;
+    }
+
+    /// Sets the theme the widgets and menu backgrounds are painted with.
+    pub fn set_theme(&mut self, theme: Theme) {
+        self.theme = theme;
+    }
+
+    /// The active theme; [`Theme::VANILLA`] until [`Self::set_theme`] is called.
+    #[must_use]
+    pub fn theme(&self) -> Theme {
+        self.theme
     }
 
     /// The menu textures; empty fields select the original fallbacks.

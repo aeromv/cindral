@@ -8,10 +8,12 @@ license.workspace = true
 publish = false
 
 [dependencies]
+cindral-packext.workspace = true
 bytemuck.workspace = true
 glam = "0.34"
 pollster = "1"
 thiserror.workspace = true
+tracing.workspace = true
 cindral-core.workspace = true
 cindral-game.workspace = true
 cindral-mesh.workspace = true

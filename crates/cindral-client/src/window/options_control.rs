@@ -12,19 +12,40 @@ use std::sync::Arc;
 use winit::event::{ElementState, KeyEvent, MouseButton};
 use winit::keyboard::{KeyCode, PhysicalKey};
 
-use super::{upload_glint_texture, upload_gui_atlas, upload_sky_textures, App};
-use crate::dials::DialAnimator;
-use crate::entity_render::EntityTextures;
+use super::startup::{
+    load_packs_and_terrain, upload_custom_sky, upload_glint_texture, upload_gui_atlas,
+    upload_sky_textures,
+};
+use super::App;
 use crate::game::GameEvent;
+use crate::hud::dials::DialAnimator;
 use crate::language;
-use crate::map_render::MapTextures;
-use crate::mesher::worker_count;
+use crate::meshing::pool::worker_count;
+use crate::options::effects::{open_folder, pack_paths, packs_folder, ServerSettings};
+use crate::options::video_sections::AnimationOptions;
 use crate::options::Binding;
-use crate::options_effects::{open_folder, pack_paths, packs_folder, ServerSettings};
-use crate::options_screen::{Catalog, Outcome as OptionsOutcome, Page};
-use crate::screen::Screen;
-use crate::terrain_textures::TerrainTextures;
-use crate::texture_animator::TextureAnimator;
+use crate::resources::game_files::PackFeatures;
+use crate::resources::texture_animator::{AnimationFilter, TextureAnimator};
+use crate::resources::theme_font::FontChoice;
+use crate::resources::ui_font;
+use crate::scene::entity::EntityTextures;
+use crate::scene::map::MapTextures;
+use crate::screens::options::{Catalog, Outcome as OptionsOutcome, Page};
+use crate::screens::Screen;
+use cindral_game::particles::{ParticleCategory, ParticleFilter};
+
+/// The animated block textures the Animations page leaves running. A free
+/// function so it can be called while the renderer is borrowed from the window.
+pub(super) fn animation_filter(animations: &AnimationOptions) -> AnimationFilter {
+    AnimationFilter {
+        water: animations.water,
+        lava: animations.lava,
+        fire: animations.fire,
+        portal: animations.portal,
+        terrain: animations.terrain,
+        custom: animations.textures,
+    }
+}
 
 impl App {
     /// Handles a key while the options screen is open. While a key binding
@@ -34,12 +55,13 @@ impl App {
             return;
         };
         let pressed = event.state == ElementState::Pressed && !event.repeat;
-        if self.options_screen.capturing().is_some() {
+        if self.options_menu.screen.capturing().is_some() {
             if pressed {
                 if code == KeyCode::Escape {
-                    self.options_screen.cancel_capture();
+                    self.options_menu.screen.cancel_capture();
                 } else {
-                    self.options_screen
+                    self.options_menu
+                        .screen
                         .capture(&mut self.options, Binding::Key(code));
                 }
             }
@@ -62,27 +84,50 @@ impl App {
     ) -> bool {
         if screen != Screen::Options
             || state != ElementState::Pressed
-            || self.options_screen.capturing().is_none()
+            || self.options_menu.screen.capturing().is_none()
         {
             return false;
         }
         if let Some(binding) = Binding::from_mouse(button) {
-            self.options_screen.capture(&mut self.options, binding);
+            self.options_menu.screen.capture(&mut self.options, binding);
         }
         true
     }
 
     /// Writes the options to disk when they changed since the last write.
     pub(super) fn save_options(&mut self) {
-        if self.options == self.saved_options {
+        if self.options == self.options_menu.saved {
             return;
         }
-        if let Some(path) = &self.options_path {
+        if let Some(path) = &self.options_menu.path {
             if let Err(error) = self.options.save(path) {
                 tracing::warn!(path = %path.display(), %error, "could not save the options");
             }
         }
-        self.saved_options = self.options.clone();
+        self.options_menu.saved = self.options.clone();
+    }
+
+    /// Tells the game thread which particle categories may be created.
+    pub(super) fn send_particle_categories(&self) {
+        let animations = &self.options.video.animations;
+        let categories = [
+            (ParticleCategory::Redstone, animations.redstone_particles),
+            (ParticleCategory::Explosion, animations.explosion_particles),
+            (ParticleCategory::Flame, animations.flame_particles),
+            (ParticleCategory::Smoke, animations.smoke_particles),
+            (ParticleCategory::Void, animations.void_particles),
+            (ParticleCategory::Water, animations.water_particles),
+            (ParticleCategory::RainSplash, animations.rain_splash),
+            (ParticleCategory::Portal, animations.portal_particles),
+            (ParticleCategory::Potion, animations.potion_particles),
+            (ParticleCategory::Dripping, animations.dripping_particles),
+            (ParticleCategory::Firework, animations.firework_particles),
+        ]
+        .into_iter()
+        .fold(ParticleFilter::default(), |filter, (category, on)| {
+            filter.with(category, on)
+        });
+        self.send_event(GameEvent::ParticleCategories(categories));
     }
 
     /// Tells the game thread how many particles to create.
@@ -94,13 +139,14 @@ impl App {
     /// they are now. Escape and Done lead back to the screen it was opened
     /// from: the title screen or the game menu.
     pub(super) fn open_options(&mut self, page: Page) {
-        self.options_origin = self.screen;
-        self.options_screen
-            .set_over_world(self.options_origin == Screen::GameMenu);
-        self.options_screen.set_catalog(Catalog::discover());
+        self.options_menu.origin = self.screen;
+        self.options_menu
+            .screen
+            .set_over_world(self.options_menu.origin == Screen::GameMenu);
+        self.options_menu.screen.set_catalog(Catalog::discover());
         self.sync_pack_icons();
         if page != Page::Main {
-            self.options_screen.open_page(page, &self.options);
+            self.options_menu.screen.open_page(page, &self.options);
         }
         self.set_screen(Screen::Options);
     }
@@ -110,15 +156,18 @@ impl App {
     /// images, so the favicons of the server list are put back on its next
     /// visit.
     fn sync_pack_icons(&mut self) {
-        let (Some(atlas), Some(renderer)) = (self.gui_atlas.as_ref(), self.renderer.as_mut())
+        let (Some(atlas), Some(renderer)) =
+            (self.assets.gui_atlas.as_ref(), self.renderer.as_mut())
         else {
             return;
         };
-        let grown =
-            crate::official::grow_atlas(Some(atlas), &self.options_screen.pack_icon_images());
+        let grown = crate::resources::official::grow_atlas(
+            Some(atlas),
+            &self.options_menu.screen.pack_icon_images(),
+        );
         upload_gui_atlas(renderer, Some(&grown));
-        self.options_screen.assign_pack_icon_sheets(&grown);
-        self.gui_atlas = Some(grown);
+        self.options_menu.screen.assign_pack_icon_sheets(&grown);
+        self.assets.gui_atlas = Some(grown);
         self.server_icons_revision = u64::MAX;
     }
 
@@ -153,53 +202,86 @@ impl App {
     /// a changed render distance, chat setting or skin layer (when a session
     /// runs) and goes back to the screen that opened it.
     pub(super) fn close_options(&mut self) {
-        self.options_screen.reset();
+        self.options_menu.screen.reset();
         self.options.clamp();
-        let changed = ServerSettings::of(&self.options) != ServerSettings::of(&self.saved_options);
-        let particles_changed = self.options.video.particles != self.saved_options.video.particles;
+        let changed =
+            ServerSettings::of(&self.options) != ServerSettings::of(&self.options_menu.saved);
+        let particles_changed =
+            self.options.video.particles != self.options_menu.saved.video.particles;
         let settings = ServerSettings::of(&self.options);
+        let animations_changed =
+            self.options.video.animations != self.options_menu.saved.video.animations;
         self.save_options();
         if particles_changed {
             self.send_particle_setting();
         }
+        if animations_changed {
+            self.assets
+                .texture_animator
+                .set_filter(animation_filter(&self.options.video.animations));
+            self.send_particle_categories();
+        }
         if changed {
             self.send_event(settings.event());
         }
-        self.set_screen(self.options_origin);
+        self.set_screen(self.options_menu.origin);
     }
 
     /// Hot-reloads the active resource packs, rebinding the block atlas and
     /// re-meshing all loaded chunk columns.
     pub(super) fn reload_resources(&mut self) {
         tracing::info!("reloading resource packs...");
-        let terrain = TerrainTextures::load_with_packs(&pack_paths(
-            &self.args.resource_packs,
-            &self.options,
-            packs_folder().as_deref(),
-            self.server_pack.active_path(),
-        ));
+        let (terrain, files, custom_animations) = load_packs_and_terrain(
+            &pack_paths(
+                &self.args.resource_packs,
+                &self.options,
+                packs_folder().as_deref(),
+                self.server_pack.active_path(),
+            ),
+            PackFeatures::from_quality(&self.options.video.quality),
+        );
+        self.assets.files = files;
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
+        self.assets.font = ui_font::load_with(&self.assets.files);
+        match ui_font::install(renderer, &self.assets.font.atlas) {
+            Ok(installed) => {
+                // The game font is bound now: the theme font is swapped in
+                // again by the next frame if the theme wants it.
+                self.assets.font_choice = FontChoice::Game;
+                self.assets.ui_atlas = Some(Arc::new(installed.atlas));
+            }
+            Err(error) => tracing::warn!(%error, "could not install the pack font"),
+        }
         let installed = terrain.install(renderer);
         // The packs page can be opened again without a new catalog: keep its icons.
-        let icons = self.options_screen.pack_icon_images();
-        let gui_atlas = crate::official::grow_atlas(installed.gui_atlas(), &icons);
+        let icons = self.options_menu.screen.pack_icon_images();
+        let gui_atlas = crate::resources::official::grow_atlas(installed.gui_atlas(), &icons);
         upload_gui_atlas(renderer, Some(&gui_atlas));
-        self.options_screen.assign_pack_icon_sheets(&gui_atlas);
+        self.options_menu.screen.assign_pack_icon_sheets(&gui_atlas);
         upload_glint_texture(renderer, installed.glint_texture());
-        upload_sky_textures(renderer);
-        self.gui_atlas = Some(gui_atlas);
+        upload_sky_textures(renderer, &self.assets.files);
+        self.assets.custom_sky = upload_custom_sky(renderer, &self.assets.files);
+        self.assets.world_colors =
+            crate::resources::custom_colors::WorldColors::upload(renderer, &self.assets.files);
+        self.assets.gui_atlas = Some(gui_atlas);
         self.hud_cache.invalidate();
         self.server_icons_revision = u64::MAX;
-        self.items = installed.items();
+        self.assets.items = installed.items();
         self.dials = DialAnimator::new(installed.dials());
-        self.texture_animator = TextureAnimator::new(installed.animations().to_vec());
-        self.entity_textures = Some(EntityTextures::load_with_font(
+        self.assets.leaf_layers = installed.leaf_layers();
+        self.assets.texture_animator = TextureAnimator::for_terrain(
+            &installed,
+            animation_filter(&self.options.video.animations),
+        )
+        .with_custom(custom_animations);
+        self.assets.entity_textures = Some(EntityTextures::load_with_font(
             renderer,
-            self.ui_atlas.as_ref(),
+            self.assets.ui_atlas.as_ref(),
+            self.assets.files.clone(),
         ));
-        self.map_textures = Some(MapTextures::load(renderer));
+        self.assets.map_textures = Some(MapTextures::load(renderer, &self.assets.files));
         if let Some(world) = self.world.as_mut() {
             world.reload_terrain(
                 &installed,

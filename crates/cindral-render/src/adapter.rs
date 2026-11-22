@@ -41,6 +41,8 @@ pub struct AdapterSummary {
     pub backend: String,
     /// The kind of device, used to choose the first video preset.
     pub kind: AdapterKind,
+    /// The raw WGPU backend enum variant, when known.
+    pub backend_type: Option<wgpu::Backend>,
 }
 
 impl AdapterSummary {
@@ -66,6 +68,7 @@ impl AdapterSummary {
             vendor,
             backend,
             kind: AdapterKind::of(info.device_type),
+            backend_type: Some(info.backend),
         }
     }
 }

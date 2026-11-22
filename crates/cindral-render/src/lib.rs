@@ -22,16 +22,19 @@ mod cave_graph;
 mod chunk_pass;
 mod clouds;
 mod dynamic_blocks;
+mod dynamic_lights;
 pub mod entity_pass;
 mod environment;
 mod error;
 mod fog;
 mod font;
+pub mod frame_pacing;
 mod gpu_timer;
 mod hires_blocks;
 pub mod hud;
 pub mod hud_hearts;
 mod items;
+mod layer_set;
 mod lightmap;
 mod mipmap;
 mod motion_blur;
@@ -41,7 +44,6 @@ mod overlay;
 mod overlays;
 mod panorama;
 mod particles;
-mod render_scale;
 mod renderer;
 mod scene_blur;
 mod sky;
@@ -56,32 +58,38 @@ pub use camera::{Camera, Frustum};
 pub use cindral_ui::screens::gui_scale;
 pub use cindral_ui::SpriteSheet;
 pub use clouds::CloudMode;
+pub use dynamic_lights::{DynamicLight, DynamicLightSet, LIGHT_RADIUS, MAX_DYNAMIC_LIGHTS};
 pub use entity_pass::{EntityBatch, EntityRenderer, EntityTexture, EntityVertex};
-pub use environment::RenderEnvironment;
+pub use environment::{ColorOverrides, RenderEnvironment, SkyDetails};
 pub use error::RenderError;
-pub use fog::{light_brightness, FogContext, FogMedium, FogMode, FogParams};
-pub use gpu_timer::{GpuTimings, GROUP_NAMES};
+pub use fog::{
+    light_brightness, FogContext, FogKind, FogMedium, FogMode, FogParams, FogSettings,
+    VANILLA_FOG_START,
+};
+pub use frame_pacing::{FramePacingStats, FramePacingTracker, SurfaceInfo};
+pub use gpu_timer::{DrawCallStats, GpuTimings, VramStats, GROUP_NAMES};
 pub use hud::{
-    chat_input_hit, chat_run_at, draw_hud_gui, measure_mod_widget, HudSheets, InputHit, LineIcon,
-    ModCell, ModLine, ModWidgetView, ShadowStyle, WidgetStyle,
+    chat_input_hit, chat_run_at, draw_hud_gui, measure_mod_widget, measure_mod_widget_view,
+    HudSheets, InputHit, ModCell, ModIcon, ModLabel, ModLine, ModTick, ModWidgetView, ShadowStyle,
+    WidgetStyle,
 };
 pub use hud::{
     plain_text, ActionBarView, BossView, ChatInputView, ChatLineView, ChatRunView, ChatStyle,
-    CombatFacts, DebugF3View, HudState, ModFacts, SidebarLineView, SidebarView, TabEntryView,
-    TabListView, TabValueStyle, TitleView,
+    DebugF3View, HudState, LagometerView, SidebarLineView, SidebarView, TabEntryView, TabListView,
+    TabValueStyle, TitleView,
 };
 pub use hud_hearts::{HeartsTint, HeartsView};
 pub use items::{
     IconProvider, NoIcons, ICON_ATLAS_SIZE, ICON_CELL_SIZE, PORTRAIT_KEY, PORTRAIT_SIZE,
 };
+pub use layer_set::LayerSet;
 pub use motion_blur::{MotionBlurSettings, MotionBlurVersion};
 pub use nametag::Nametag;
-pub use outline::{edge_vertices, OutlineBox, OUTLINE_GROWTH};
+pub use outline::{edge_vertices, DebugLine, OutlineBox, MAX_DEBUG_LINES, OUTLINE_GROWTH};
 pub use overlay::{Overlay, OverlayVertex};
 pub use overlays::{Portal, ScreenOverlays, Underwater};
 pub use particles::{ParticleSprite, MAX_SPRITES};
-pub use render_scale::MIN_RENDER_SCALE;
-pub use renderer::{default_backends, Image, Renderer};
+pub use renderer::{Image, Renderer};
 pub use sky::{SkyImage, SkyState, SkyTextures};
 pub use texture::{fallback_texture_data, LAYER_BYTES, TEXTURE_SIZE};
 pub use ui_pass::{fallback_atlas, FontAtlasError, UiBatch, UiBatchKind, UiPass};

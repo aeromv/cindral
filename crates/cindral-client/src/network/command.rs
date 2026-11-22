@@ -192,6 +192,9 @@ pub enum ClientCommand {
     Respawn,
     /// `Client Status` (0x16): the statistics request of the statistics screen.
     RequestStats,
+    /// `Client Status` (0x16): the inventory key opened the inventory
+    /// (`OPEN_INVENTORY_ACHIEVEMENT`).
+    OpenInventory,
     /// `Held Item Change` (0x09): the selected hotbar slot.
     HeldItemChange {
         /// The slot index.
@@ -269,13 +272,6 @@ pub enum ClientCommand {
         /// The new content of the slot.
         stack: ItemStack,
     },
-}
-
-/// The `Client Settings` locale of a language code: lowercase (`fr_FR` is
-/// sent as `fr_fr`), as `Minecraft.getLanguageManager().getCurrentLanguage()
-/// .getLanguageCode()` is lowercased by the 1.8 client.
-fn locale_of(code: &str) -> String {
-    code.to_lowercase()
 }
 
 impl ClientCommand {
@@ -432,6 +428,9 @@ impl ClientCommand {
             Self::RequestStats => PlayServerbound::ClientStatus(serverbound::ClientStatus {
                 action: serverbound::ClientStatusAction::RequestStats,
             }),
+            Self::OpenInventory => PlayServerbound::ClientStatus(serverbound::ClientStatus {
+                action: serverbound::ClientStatusAction::OpenInventoryAchievement,
+            }),
             Self::HeldItemChange { slot } => {
                 PlayServerbound::HeldItemChange(ServerHeldItemChange { slot })
             }
@@ -442,7 +441,10 @@ impl ClientCommand {
                 chat_colors,
                 skin_parts,
             } => PlayServerbound::ClientSettings(serverbound::ClientSettings {
-                locale: locale_of(crate::language::current().code()),
+                // `GameSettings.language`, written as the language pack names
+                // it (`en_US`, `fr_FR`): the 1.8 client does not lowercase it
+                // (MCP `GameSettings.java:1214`).
+                locale: crate::language::current().code().to_owned(),
                 view_distance,
                 chat_mode,
                 chat_colors,

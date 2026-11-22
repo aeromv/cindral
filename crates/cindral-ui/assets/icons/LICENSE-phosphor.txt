@@ -1,6 +1,6 @@
 The SVG files in this directory are icons from Phosphor Icons
 (https://phosphoricons.com), regular weight, renamed after their use in
-Cindral, except close.svg, which was drawn for Cindral. The Phosphor icons
+Cindral, except close.svg and cape.svg, which were drawn for Cindral. The Phosphor icons
 are distributed under the MIT License:
 
 MIT License

@@ -25,7 +25,7 @@ use cindral_core::lang::Lang;
 use cindral_ui::menus::{AccountBadge, AccountRow, AccountsScreen, DeviceCodePrompt};
 use cindral_ui::{FontAtlas, Ui};
 
-use crate::screen::Screen;
+use crate::screens::Screen;
 use heads::Heads;
 use worker::Event;
 

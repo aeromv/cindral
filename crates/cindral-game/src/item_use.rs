@@ -24,8 +24,9 @@ use crate::entity::EntityRecord;
 use crate::gamemode::GameMode;
 use crate::interaction::{Interaction, Outgoing};
 use crate::items::{self, ItemKind, ToolKind};
+use crate::placement::{self, PlaceClick, Placement, Placer};
 use crate::raycast::RayHit;
-use crate::shapes::{Aabb, BlockSource};
+use crate::shapes::BlockSource;
 
 /// The ticks before a held right button clicks again
 /// (MCP `Minecraft.rightClickDelayTimer`, `rightClickMouse` line 1552).
@@ -75,6 +76,9 @@ pub struct ItemUseView {
 
 /// The bow item id.
 const BOW: i16 = 261;
+
+/// The fishing rod item id.
+pub const FISHING_ROD: i16 = 346;
 
 /// The potion item id; a splash potion (bit 14 of the damage) is thrown
 /// instead (MCP `ItemPotion.isSplash`).
@@ -261,8 +265,9 @@ pub struct UseTick<'a, W: BlockSource + ?Sized> {
     pub entity: Option<(&'a EntityRecord, EntityHit)>,
     /// The loaded world.
     pub world: &'a W,
-    /// The bounding box of the player, to refuse a placement inside it.
-    pub player: Option<Aabb>,
+    /// The player, who decides how a block is turned and may not be in the
+    /// way of the block it places.
+    pub player: Option<Placer<'a>>,
     /// Whether the sneak key is held.
     pub sneaking: bool,
     /// The selected hotbar slot.
@@ -286,6 +291,10 @@ pub struct UseOutput {
     pub swing: bool,
     /// The wooden door the click swings, to apply and play at once.
     pub door: Option<DoorToggle>,
+    /// The blocks the client places itself (MCP `ItemBlock.onItemUse` runs
+    /// on the client), to write at once; the held stack loses one item
+    /// outside creative.
+    pub placed: Option<Placement>,
 }
 
 /// The use state of the local player (MCP `EntityPlayer.itemInUse`).
@@ -396,12 +405,37 @@ impl ItemUse {
             }
             let item = held.cloned().unwrap_or(ItemStack::EMPTY);
             let places = held.is_some_and(is_block_item) && tick.mode.can_place();
-            // The placement is skipped when the player stands in the way, but a
-            // click the block consumes (a door) still goes to the server and
-            // still swings the arm.
-            let packet = interaction
-                .place_block(tick.mode, &hit, tick.player.as_ref(), item.clone())
-                .or_else(|| activated.then(|| Interaction::activate_block(&hit, item)));
+            let place = PlaceClick {
+                world: tick.world,
+                hit: &hit,
+                item: &item,
+                placer: tick.player.as_ref(),
+            };
+            // MCP `PlayerControllerMP.onPlayerRightClick`:
+            // 1. If the block is activated, send the block placement packet and swing.
+            // 2. Else if holding an ItemBlock and mode can place, check `canPlaceBlockOnSide`:
+            //    if blocked by player collision, skip the block placement (falls through to sendUseItem).
+            // 3. Otherwise (non-block item or empty hand on non-activatable block),
+            //    always send the block placement packet (without setting expected placement).
+            let packet = if activated {
+                Some(Interaction::activate_block(&hit, item))
+            } else if places {
+                placement::can_place_on_side(&place).then(|| {
+                    // `onItemUse` runs after the packet went out; adventure
+                    // players may not edit (`canPlayerEdit`).
+                    let placed = (tick.mode != GameMode::Adventure)
+                        .then(|| placement::predict(&place))
+                        .flatten();
+                    let target = placed
+                        .as_ref()
+                        .and_then(Placement::position)
+                        .unwrap_or_else(|| placement::target(tick.world, &hit));
+                    output.placed = placed;
+                    interaction.place_block(tick.mode, &hit, target, item.clone())
+                })
+            } else {
+                Some(Interaction::activate_block(&hit, item))
+            };
             if let Some(packet) = packet {
                 output.packets.push(packet);
                 if activated || places {
@@ -414,6 +448,10 @@ impl ItemUse {
             output
                 .packets
                 .push(Outgoing::UseItem { item: item.clone() });
+            // MCP `ItemFishingRod.onItemRightClick` runs on the client too and
+            // swings the arm at the cast and at the retrieve (no other item's
+            // `onItemRightClick` does); the server only shows it to the others.
+            output.swing |= item.item_id == FISHING_ROD;
             self.start(tick, item);
         }
     }
@@ -610,6 +648,26 @@ mod tests {
     }
 
     #[test]
+    fn casting_or_retrieving_a_fishing_rod_swings_the_arm() {
+        let (mut state, mut interaction) = (ItemUse::new(), Interaction::new());
+        let rod = item(FISHING_ROD, 0);
+        let output = run(&mut state, &mut interaction, &tick(Some(&rod), true, true));
+        assert_eq!(
+            output.packets,
+            vec![Outgoing::UseItem { item: rod.clone() }]
+        );
+        assert!(output.swing, "the rod swings the arm");
+        assert!(!state.is_using(), "the rod is not held in use");
+        // A click on a block the rod cannot place on falls through to the use.
+        let mut on_block = tick(Some(&rod), true, true);
+        on_block.target = Some(hit());
+        let mut state = ItemUse::new();
+        let output = run(&mut state, &mut interaction, &on_block);
+        assert!(output.swing);
+        assert!(output.packets.contains(&Outgoing::UseItem { item: rod }));
+    }
+
+    #[test]
     fn releasing_the_button_sends_the_release() {
         let (mut state, mut interaction) = (ItemUse::new(), Interaction::new());
         let sword = item(267, 0);
@@ -732,6 +790,28 @@ mod tests {
         assert!(output.swing);
         assert_eq!(output.packets.len(), 1);
         assert!(matches!(output.packets[0], Outgoing::Place { .. }));
+        // The client places the block itself, where the server will confirm it.
+        let placed: Vec<_> = output.placed.expect("predicted").changes().collect();
+        assert_eq!(
+            placed,
+            vec![(BlockPos::new(0, 1, 0), BlockState::new(4, 0))]
+        );
+        assert_eq!(
+            interaction.acknowledge_block(BlockPos::new(0, 1, 0)),
+            Some(crate::interaction::BlockAck::Placement)
+        );
+    }
+
+    #[test]
+    fn an_adventure_player_sends_the_click_but_places_nothing() {
+        let (mut state, mut interaction) = (ItemUse::new(), Interaction::new());
+        let cobble = item(4, 0);
+        let mut click = tick(Some(&cobble), true, true);
+        click.target = Some(hit());
+        click.mode = GameMode::Adventure;
+        let output = run(&mut state, &mut interaction, &click);
+        assert!(matches!(output.packets[0], Outgoing::Place { .. }));
+        assert_eq!(output.placed, None);
     }
 
     #[test]
@@ -907,8 +987,11 @@ mod tests {
 
     /// The box of a player standing in the cell above the origin, which is the
     /// cell next to the top face the `hit()` clicks.
-    fn player_in_the_way() -> Aabb {
-        Aabb::new(DVec3::new(0.2, 1.0, 0.2), DVec3::new(0.8, 2.8, 0.8))
+    fn player_in_the_way() -> Placer<'static> {
+        Placer::alone(crate::shapes::Aabb::new(
+            DVec3::new(0.2, 1.0, 0.2),
+            DVec3::new(0.8, 2.8, 0.8),
+        ))
     }
 
     fn click_with_player_in_the_way<W: BlockSource>(

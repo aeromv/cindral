@@ -1,0 +1,150 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! The white flash of a primed TNT and of a lit TNT minecart (MCP
+//! `RenderTntPrimed.doRender`, `RenderTntMinecart.func_180560_a`).
+//!
+//! Every second 5 ticks of the fuse the block is drawn a second time, added
+//! over itself in full white. The reference sets a colour whose alpha grows
+//! from `0.15` to `0.8`, but `renderBlockBrightness` gives every vertex its
+//! own opaque white (`putColorRGB_F` writes an alpha of 255), which wins: with
+//! `blendFunc(SRC_ALPHA, DST_ALPHA)` the block turns plain white. The block
+//! itself is the item pass's; this is only the white cube over it.
+
+use std::collections::HashMap;
+
+use cindral_game::entity::{EntityKind, EntityRenderSnapshot};
+use cindral_model::entity::TextureSlot;
+use cindral_render::EntityVertex;
+use glam::{Mat4, Vec3};
+
+use crate::scene::item_world::objects::{cart_flash, primed_flash};
+
+/// How much bigger than the block the cube is, so that it is not the same
+/// surface (the reference uses a polygon offset).
+const GROWTH: f32 = 1.001;
+
+/// Adds the flash of the primed TNT or TNT cart `ent` to `additive` when it
+/// is on.
+pub(super) fn add_flash(
+    additive: &mut HashMap<TextureSlot, Vec<EntityVertex>>,
+    ent: &EntityRenderSnapshot,
+) {
+    let flash = match ent.kind {
+        EntityKind::PrimedTnt => primed_flash(ent),
+        EntityKind::Minecart => cart_flash(ent),
+        _ => None,
+    };
+    let Some(block) = flash else {
+        return;
+    };
+    // The light word of an additive vertex is the tint: full white.
+    let light = 0x00FF_FFFF;
+    let cube = block
+        * Mat4::from_translation(Vec3::splat(0.5))
+        * Mat4::from_scale(Vec3::splat(GROWTH))
+        * Mat4::from_translation(Vec3::splat(-0.5));
+    let out = additive.entry(TextureSlot::Lightning).or_default();
+    // The six faces of the unit cube as pairs of triangles.
+    for (axis, side) in [(0, 0.0), (0, 1.0), (1, 0.0), (1, 1.0), (2, 0.0), (2, 1.0)] {
+        let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+        let corner = |a: f32, b: f32| {
+            let mut local = [0.0_f32; 3];
+            local[axis] = side;
+            local[u] = a;
+            local[v] = b;
+            EntityVertex {
+                position: cube.transform_point3(Vec3::from(local)).to_array(),
+                normal: [0.0, 1.0, 0.0],
+                uv: [0.5, 0.5],
+                light,
+            }
+        };
+        let quad = [
+            corner(0.0, 0.0),
+            corner(1.0, 0.0),
+            corner(1.0, 1.0),
+            corner(0.0, 1.0),
+        ];
+        out.extend([quad[0], quad[1], quad[2], quad[0], quad[2], quad[3]]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cindral_game::entity::EntityId;
+
+    fn tnt(age: f32) -> EntityRenderSnapshot {
+        let mut ent = EntityRenderSnapshot::new(
+            EntityId(1),
+            EntityKind::PrimedTnt,
+            Vec3::new(4.0, 70.0, 4.0),
+        );
+        ent.age = age;
+        ent
+    }
+
+    /// Whether the flash of a primed TNT of `age` ticks shows.
+    fn flashing(age: f32) -> bool {
+        primed_flash(&tnt(age)).is_some()
+    }
+
+    fn flash(ent: &EntityRenderSnapshot) -> Vec<EntityVertex> {
+        let mut batches = HashMap::new();
+        add_flash(&mut batches, ent);
+        batches.remove(&TextureSlot::Lightning).unwrap_or_default()
+    }
+
+    #[test]
+    fn it_flashes_for_five_ticks_out_of_ten() {
+        // `fuse / 5` is even: fuse 80, then 74 to 70, 64 to 60, ...
+        let on: Vec<u32> = (0..=20u32).filter(|age| flashing(*age as f32)).collect();
+        assert_eq!(on, [0, 6, 7, 8, 9, 10, 16, 17, 18, 19, 20]);
+    }
+
+    #[test]
+    fn the_flash_is_plain_white_from_the_first_tick() {
+        // Regression: the flash added the 0.15 to 0.8 alpha of the reference's
+        // colour, which its vertex colours override, so it barely showed.
+        let cube = flash(&tnt(0.0));
+        assert!(cube.iter().all(|vertex| vertex.light == 0x00FF_FFFF));
+        assert!(!flashing(81.0), "the fuse is spent");
+    }
+
+    #[test]
+    fn the_flash_is_a_cube_over_the_block() {
+        let cube = flash(&tnt(8.0));
+        assert_eq!(cube.len(), 36);
+        let centre = cube
+            .iter()
+            .fold(Vec3::ZERO, |sum, v| sum + Vec3::from(v.position))
+            / 36.0;
+        // The block is centred half a block over the entity.
+        assert!(
+            centre.distance(Vec3::new(4.0, 70.5, 4.0)) < 1e-3,
+            "{centre}"
+        );
+        assert!(flash(&tnt(2.0)).is_empty(), "between two flashes");
+    }
+
+    #[test]
+    fn only_a_primed_tnt_flashes() {
+        let mut other = tnt(8.0);
+        other.kind = EntityKind::Pig;
+        assert!(flash(&other).is_empty());
+    }
+
+    #[test]
+    fn a_lit_tnt_cart_flashes_and_an_unlit_one_does_not() {
+        let mut cart =
+            EntityRenderSnapshot::new(EntityId(2), EntityKind::Minecart, Vec3::new(0.0, 64.0, 0.0));
+        cart.object_data = 3;
+        assert!(flash(&cart).is_empty(), "not lit");
+        cart.meta.ignite_cart();
+        // Fuse 80: 80 / 5 is even.
+        assert_eq!(flash(&cart).len(), 36);
+        // A chest cart lit by a stray status does not flash.
+        cart.object_data = 1;
+        assert!(flash(&cart).is_empty());
+    }
+}

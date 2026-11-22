@@ -15,8 +15,9 @@ use crate::geom::Rect;
 use crate::id::WidgetId;
 use crate::input::{InputEvent, Key, PointerButton};
 use crate::text::FontAtlas;
+use crate::theme::WidgetSkin;
 
-use super::{chrome, style};
+use super::style;
 
 /// Width of the handle, in pixels.
 const HANDLE_WIDTH: f32 = 8.0;
@@ -81,12 +82,17 @@ pub fn slider(
         ui.note_button_press();
     }
     // With the real texture the handle and text follow the GUI scale, as in vanilla.
-    let skin = if ui.widgets_sheet().is_some() {
+    let flat = match ui.theme().widgets {
+        WidgetSkin::Flat(skin) => Some(skin),
+        WidgetSkin::Vanilla => None,
+    };
+    let skin = if flat.is_some() || ui.widgets_sheet().is_some() {
         (rect.height / 20.0).round().max(1.0)
     } else {
         1.0
     };
-    let handle_width = HANDLE_WIDTH * skin;
+    let handle_texels = flat.map_or(HANDLE_WIDTH, |skin| skin.handle_texels);
+    let handle_width = handle_texels * skin;
     let travel = (rect.width - handle_width).max(1.0);
     let to_value = |x: f32| ((x - rect.x - handle_width * 0.5) / travel).clamp(0.0, 1.0);
 
@@ -133,11 +139,13 @@ pub fn slider(
         ui.mark_changed(id);
     }
 
-    if ui.modern_chrome() {
-        let handle = Rect::new(rect.x + value * travel, rect.y, handle_width, rect.height);
-        let active = response.hovered || state.dragging;
-        chrome::slider_body(ui, rect, handle, skin, active);
-    } else if let Some(sheet) = ui.widgets_sheet() {
+    if let Some(flat) = flat {
+        let hovered = response.hovered || state.dragging;
+        flat.draw_slider(ui, rect, (atlas, label), value, hovered);
+        return (value, changed);
+    }
+
+    if let Some(sheet) = ui.widgets_sheet() {
         // The texture is cut in texels (GUI units), then scaled, as vanilla does.
         let texels = (rect.width / skin).round().min(400.0);
         let half = (texels / 2.0).floor();

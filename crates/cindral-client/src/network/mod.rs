@@ -44,6 +44,10 @@ pub struct NetworkConfig {
     pub chat_colors: bool,
     /// Client Settings skin-parts byte (`SkinOptions::parts_mask`).
     pub skin_parts: u8,
+    /// The client brand sent on `MC|Brand` (`MultiplayerOptions::brand`).
+    pub brand: String,
+    /// The language code of `Client Settings` (`LanguageOptions::code`).
+    pub locale: String,
     /// The address of the `Handshake` when it is not `host`.
     pub handshake_host: Option<String>,
     /// Answer every server resource pack offer with `Declined` at once
@@ -88,6 +92,8 @@ mod tests {
             chat_mode: 0,
             chat_colors: true,
             skin_parts: 0,
+            brand: cindral_net::play::DEFAULT_BRAND.to_owned(),
+            locale: cindral_net::play::DEFAULT_LOCALE.to_owned(),
             handshake_host: None,
             decline_server_packs: false,
             account_skin: false,

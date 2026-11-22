@@ -15,7 +15,7 @@ use winit::keyboard::KeyCode;
 use super::App;
 use crate::game::GameEvent;
 use crate::options::{Action, Binding};
-use crate::screenshot_file;
+use crate::screenshot::file;
 
 impl App {
     /// Whether the binding of `action` is held. Shift and Control are told
@@ -25,10 +25,10 @@ impl App {
     pub(super) fn held(&self, action: Action) -> bool {
         match self.options.keys.get(action) {
             Binding::Key(key) => {
-                self.keys.contains(&key)
-                    || modifier_twin(key).is_some_and(|twin| self.keys.contains(&twin))
+                self.input.keys.contains(&key)
+                    || modifier_twin(key).is_some_and(|twin| self.input.keys.contains(&twin))
             }
-            Binding::Mouse(index) => self.buttons.contains(&index),
+            Binding::Mouse(index) => self.input.buttons.contains(&index),
         }
     }
 
@@ -40,7 +40,7 @@ impl App {
     /// left held for the game that comes next.
     pub(super) fn release_button(&mut self, button: MouseButton) {
         if let Some(Binding::Mouse(index)) = Binding::from_mouse(button) {
-            self.buttons.remove(&index);
+            self.input.buttons.remove(&index);
         }
     }
 
@@ -48,11 +48,12 @@ impl App {
     /// (`KeyBinding.unPressAllKeys`, which `Minecraft.setIngameNotInFocus`
     /// calls when a screen takes the mouse).
     pub(super) fn unpress_all(&mut self) {
-        self.keys.clear();
-        self.buttons.clear();
-        self.break_block = false;
-        self.place_block = false;
-        self.pick_block = false;
+        self.input.keys.clear();
+        self.input.buttons.clear();
+        self.presses.break_block = false;
+        self.presses.place_block = false;
+        self.presses.pick_block = false;
+        self.presses.hotbar_keys = [0; 9];
     }
 
     /// Runs the actions bound to a key or button that was just pressed.
@@ -60,7 +61,7 @@ impl App {
         let actions: Vec<Action> = self.options.keys.actions_for(binding).collect();
         for action in actions {
             // An action that opened a screen takes the press; the others wait.
-            if self.screen != crate::screen::Screen::None {
+            if self.screen != crate::screens::Screen::None {
                 break;
             }
             self.run_action(action);
@@ -72,42 +73,61 @@ impl App {
             Action::Chat => self.open_chat(""),
             Action::Command => self.open_chat("/"),
             Action::Inventory => self.open_inventory(),
-            Action::Attack => self.break_block |= self.mouse_captured,
-            Action::Use => self.place_block |= self.mouse_captured,
-            Action::PickBlock => self.pick_block |= self.mouse_captured,
-            Action::Drop if self.mouse_captured => self.drop_item = Some(self.drop_kind()),
-            Action::TogglePerspective => self.toggle_perspective = true,
-            Action::Screenshot => self.screenshot_requested = true,
+            Action::Attack => self.presses.break_block |= self.input.mouse_captured,
+            Action::Use => self.presses.place_block |= self.input.mouse_captured,
+            Action::PickBlock => self.presses.pick_block |= self.input.mouse_captured,
+            Action::Drop if self.input.mouse_captured => {
+                self.presses.drop_item = Some(self.drop_kind())
+            }
+            Action::TogglePerspective => self.presses.toggle_perspective = true,
+            Action::Screenshot => self.presses.screenshot = true,
             Action::Fullscreen => self.options.video.fullscreen = !self.options.video.fullscreen,
             other => {
                 if let Some(slot) = other.hotbar_slot() {
-                    self.select_slot = Some(slot);
+                    // One press more for that key (`KeyBinding.onTick`); the
+                    // game picks the slot, as `runTick` does.
+                    let presses = &mut self.presses.hotbar_keys[usize::from(slot)];
+                    *presses = presses.saturating_add(1);
                 }
             }
         }
     }
 
-    /// Writes a captured frame to the `screenshots` folder and says so in the
-    /// log (the reference prints "Saved screenshot as ..." in the chat).
+    /// Writes a captured frame to the `screenshots` folder on a background
+    /// worker thread so PNG encoding and disk I/O never stall the render loop,
+    /// then reports the outcome in the log and in the in-game chat.
     pub(super) fn save_screenshot(&self, captured: Result<cindral_render::Image, RenderError>) {
-        let folder = cindral_assets::cache::data_dir().map(|dir| dir.join(screenshot_file::FOLDER));
-        let saved = match (captured, folder) {
-            (Ok(image), Some(folder)) => {
-                screenshot_file::save(&folder, &image.rgba, image.width, image.height)
-                    .map_err(|error| error.to_string())
-            }
-            (Err(error), _) => Err(error.to_string()),
-            (_, None) => Err("no data folder".to_string()),
-        };
-        match &saved {
-            Ok(path) => tracing::info!(path = %path.display(), "saved screenshot"),
-            Err(error) => tracing::warn!(%error, "could not save the screenshot"),
+        let folder = cindral_assets::cache::data_dir().map(|dir| dir.join(file::FOLDER));
+        let lang = std::sync::Arc::clone(&self.lang);
+        let events = self
+            .session
+            .as_ref()
+            .map(|session| session.events().clone());
+        let spawned = std::thread::Builder::new()
+            .name("cindral-screenshot".to_string())
+            .spawn(move || {
+                let saved = match (captured, folder) {
+                    (Ok(image), Some(folder)) => {
+                        file::save(&folder, &image.rgba, image.width, image.height)
+                            .map_err(|error| error.to_string())
+                    }
+                    (Err(error), _) => Err(error.to_string()),
+                    (_, None) => Err("no data folder".to_string()),
+                };
+                match &saved {
+                    Ok(path) => tracing::info!(path = %path.display(), "saved screenshot"),
+                    Err(error) => tracing::warn!(%error, "could not save the screenshot"),
+                }
+                // `Minecraft.runTick` prints the result in the chat. Without a game
+                // there is no chat to print in: the log above is all there is.
+                if let Some(events) = events {
+                    let _ =
+                        events.try_send(GameEvent::LocalChat(screenshot_chat_line(&lang, &saved)));
+                }
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(%error, "could not spawn screenshot worker");
         }
-        // `Minecraft.runTick` prints the result in the chat. Without a game
-        // there is no chat to print in: the log above is all there is.
-        self.send_event(GameEvent::LocalChat(screenshot_chat_line(
-            &self.lang, &saved,
-        )));
     }
 
     /// Tells the built-in mods about a left or right click (for a CPS counter).
@@ -127,14 +147,18 @@ impl App {
             return;
         };
         match state {
-            ElementState::Pressed if !self.mouse_captured => self.capture_mouse(true),
+            ElementState::Pressed if !self.input.mouse_captured => self.capture_mouse(true),
             ElementState::Pressed => {
-                self.buttons.insert(index);
+                self.input.buttons.insert(index);
                 self.count_click(button);
                 self.press_binding(Binding::Mouse(index));
+                self.input.last_time = std::time::Instant::now();
+                self.publish_input();
             }
             ElementState::Released => {
-                self.buttons.remove(&index);
+                self.input.buttons.remove(&index);
+                self.input.last_time = std::time::Instant::now();
+                self.publish_input();
             }
         }
     }

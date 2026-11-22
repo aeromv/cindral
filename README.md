@@ -39,11 +39,19 @@ client should never stand between your input and the server.
 
 **Built-in mods**: one menu, nothing to download (see [Mods](#mods)).
 
+**Resource packs and visuals**
+- OptiFine-style pack features: connected textures, custom items, custom
+  skies, custom colours, random and custom entity models, custom GUIs and
+  fonts, and texture animations.
+- Dynamic Lights: a held torch or a burning mob lights the blocks around it.
+- OptiFine-style video settings, Smart Animations and a lagometer.
+- Server resource packs.
+
 **Interface**
-- A modern look for every screen, or the classic Minecraft look that follows
-  your resource pack, switchable under **Options → Interface**.
+- Three themes: Ember (the Cindral look, the default), Amethyst, and Vanilla,
+  which follows the buttons and backgrounds of your resource pack.
 - A drag-and-drop HUD editor: move and resize every widget on screen.
-- Resource packs, PvP packs included, and server resource packs.
+- Discord Rich Presence.
 
 **Accounts**
 - Microsoft accounts with an account switcher, offline mode, and sessions
@@ -76,8 +84,8 @@ no game files are shipped with Cindral.
    The client opens on the title screen. Add a server under **Play**, or connect
    straight away with `cindral play.example.net 25565`.
 
-On the first start Cindral picks a video preset for your graphics card. To use
-the PvP preset, start it with `cindral --preset pvp`.
+To start with the PvP video preset (render distance 4, no frame cap), run
+`cindral --preset pvp`. The other presets are `low`, `medium` and `high`.
 
 ### Resource packs
 
@@ -106,8 +114,15 @@ off and has its own settings; HUD mods can be placed anywhere on screen.
 | Fullbright | Full light in caves and at night |
 | No Hurt Cam | No camera tilt when you take damage |
 | Motion Blur | Blur when turning, in three styles |
+| 1.7 Animations | 1.7 sword blocking and held-item positions |
+| Direction HUD | A compass ruler at the top of the screen |
+| Capes | Capes from OptiFine, MinecraftCapes, LabyMod and Cosmetica |
 
 Reach Display and Combo Counter count only the hits the server confirmed.
+
+The Capes mod is on by default. To show capes it sends the names of the
+players you meet to those cape services; turn it off in the mods menu if you
+prefer.
 
 Cindral has no autoclicker, reach, velocity or any other feature that gives an
 unfair advantage, and it will not get one.

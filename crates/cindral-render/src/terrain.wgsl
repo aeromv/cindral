@@ -35,23 +35,21 @@ struct Camera {
     // Exponential fog density (water, lava); above zero it replaces the
     // linear range.
     fog_density: f32,
-    // Above 0.5 the opaque passes take the lightmap colour from the vertex
-    // instead of sampling it per fragment: set while smooth lighting is off,
-    // when the four corners of every opaque quad have the same levels, so the
-    // result is the same and each fragment skips four uniform reads; also set
-    // by Fast Render, where smooth lighting then blends colours. Also
-    // keeps the Rust `CameraUniform` and this struct at the same layout.
-    vertex_light: f32,
+    // Explicit tail padding keeps the Rust `CameraUniform` and this struct at
+    // the same 112-byte, 16-byte-aligned layout.
+    // 1 when the fog is measured by depth instead of distance (`fog_distance`).
+    fog_planar: f32,
     // Integer world offset of the render origin: positions are sent to the
     // GPU relative to it (`view_proj` is built for that origin), so f32
     // keeps its precision far from the world origin.
     origin: vec3<f32>,
-    // Above 0.5 the fog share is worked out per vertex and interpolated
-    // ("Fast Render", ADR-0073), like a fixed-function fog, instead of per
-    // fragment. Fills the tail of `origin`'s 16 bytes.
-    vertex_fog: f32,
+    // How many of `lights` are on (`dynamic_lights.wgsl`); 0 when Dynamic
+    // Lights is off.
+    light_count: u32,
     // The vanilla lightmap, `[sky * 16 + block]` (`lightmap.rs`).
     lightmap: array<vec4<f32>, 256>,
+    // The dynamic lights of the frame, the first `light_count` of them.
+    lights: array<DynamicLight, 16>,
 };
 
 @group(0) @binding(0) var<uniform> camera: Camera;
@@ -91,14 +89,6 @@ struct VertexOut {
     @location(5) shade: f32,
     // Constant over a quad, so flat interpolation loses no information.
     @location(6) @interpolate(flat) tint: vec3<f32>,
-    // The lightmap colour of the vertex, when `camera.vertex_light` is set;
-    // interpolated, so Fast Render with smooth lighting blends the corners.
-    @location(7) light: vec3<f32>,
-    // The layer of the texture in `hires_textures`, or -1: looked up once per
-    // vertex instead of once per fragment (same value over a quad).
-    @location(8) @interpolate(flat) hires: i32,
-    // The fog share of the vertex when `camera.vertex_fog` is set.
-    @location(9) fog: f32,
 };
 
 // 1.8 face shading from `BlockModelRenderer.EnumNeighborInfo`: top 1.0,
@@ -134,20 +124,6 @@ fn vs_main(in: VertexIn) -> VertexOut {
     out.levels = vec2<f32>(f32(in.light & 0xFu), f32((in.light >> 4u) & 0xFu));
     out.ao = 0.4 + 0.6 * (f32((in.light >> 8u) & 0xFu) / 15.0);
 
-    out.light = vec3<f32>(0.0);
-    if (camera.vertex_light > 0.5) {
-        out.light = lightmap_sample(out.levels.x, out.levels.y);
-    }
-    out.hires = -1;
-    if (in.layer < 4096u) {
-        out.hires = hires_map.slots[in.layer / 4u][in.layer % 4u];
-    }
-    out.fog = 0.0;
-    if (camera.vertex_fog > 0.5) {
-        let eye_distance = distance(out.world_position, camera.camera_pos);
-        out.fog = fog_amount(eye_distance, camera.fog_start, camera.fog_end, camera.fog_density);
-    }
-
     let shaded = (in.light & (1u << 12u)) != 0u;
     if (shaded) {
         out.shade = face_shade(in.normal);
@@ -161,40 +137,31 @@ fn vs_main(in: VertexIn) -> VertexOut {
 // target is darkened by the fragment light so a cave does not show a bright
 // sky-coloured haze (`ADR-0008` §3).
 fn shade_fragment(in: VertexOut, texel: vec4<f32>) -> vec3<f32> {
-    return shade_lit(in, texel, lightmap_sample(in.levels.x, in.levels.y));
-}
-
-// `shade_fragment` for the opaque passes, which may take the lightmap colour
-// from the vertex (see `Camera.vertex_light`).
-fn shade_opaque(in: VertexOut, texel: vec4<f32>) -> vec3<f32> {
-    if (camera.vertex_light > 0.5) {
-        return shade_lit(in, texel, in.light);
-    }
-    return shade_fragment(in, texel);
-}
-
-fn shade_lit(in: VertexOut, texel: vec4<f32>, light: vec3<f32>) -> vec3<f32> {
+    let light = lightmap_sample(
+        dynamic_block_light(in.levels.x, in.world_position),
+        in.levels.y,
+    );
     let lit = texel.rgb * in.tint * light * in.ao * in.shade;
     let fog_target = camera.fog_color * (0.15 + 0.85 * light);
-    var fog = in.fog;
-    if (camera.vertex_fog <= 0.5) {
-        let eye_distance = distance(in.world_position, camera.camera_pos);
-        fog = fog_amount(eye_distance, camera.fog_start, camera.fog_end, camera.fog_density);
-    }
+    let distance = fog_distance(
+        distance(in.world_position, camera.camera_pos),
+        in.clip_position.w,
+        camera.fog_planar,
+    );
+    let fog = fog_amount(distance, camera.fog_start, camera.fog_end, camera.fog_density);
     return mix(lit, fog_target, fog);
 }
 
 // The block or item texel at `uv` in `layer`: from the second array when the
 // texture has a large copy, else from the first. The derivatives are taken
 // before the branch (they need uniform control flow) and handed to the sample.
-fn sample_block(raw_uv: vec2<f32>, layer: u32, slot: i32) -> vec4<f32> {
-    let dx = dpdx(raw_uv);
-    let dy = dpdy(raw_uv);
-    // A merged quad (`cindral_mesh::merge_faces`) repeats its texture: its
-    // coordinates run past one and wrap here. Coordinates inside the texture,
-    // which every unmerged quad has, are left exactly as they are.
-    let outside = (raw_uv < vec2<f32>(-0.0009765625)) | (raw_uv > vec2<f32>(1.0009765625));
-    let uv = select(raw_uv, fract(raw_uv), outside);
+fn sample_block(uv: vec2<f32>, layer: u32) -> vec4<f32> {
+    let dx = dpdx(uv);
+    let dy = dpdy(uv);
+    var slot = -1;
+    if (layer < 4096u) {
+        slot = hires_map.slots[layer / 4u][layer % 4u];
+    }
     if (slot >= 0) {
         return textureSampleGrad(hires_textures, block_sampler, uv, slot, dx, dy);
     }
@@ -205,11 +172,11 @@ fn sample_block(raw_uv: vec2<f32>, layer: u32, slot: i32) -> vec4<f32> {
 // REPLACE blend state stays well-defined.
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    let texel = sample_block(in.uv, in.layer, in.hires);
+    let texel = sample_block(in.uv, in.layer);
     if (texel.a < 0.5) {
         discard;
     }
-    return vec4<f32>(shade_opaque(in, texel), 1.0);
+    return vec4<f32>(shade_fragment(in, texel), 1.0);
 }
 
 // Opaque pass for quads whose texture has no texel under the alpha test (the
@@ -217,8 +184,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 // hidden fragments before shading them.
 @fragment
 fn fs_solid(in: VertexOut) -> @location(0) vec4<f32> {
-    let texel = sample_block(in.uv, in.layer, in.hires);
-    return vec4<f32>(shade_opaque(in, texel), 1.0);
+    let texel = sample_block(in.uv, in.layer);
+    return vec4<f32>(shade_fragment(in, texel), 1.0);
 }
 
 // Item icons: the reference draws GUI items with alpha test 0.1 and alpha
@@ -227,7 +194,7 @@ fn fs_solid(in: VertexOut) -> @location(0) vec4<f32> {
 // cell that the UI pass later blends, so the straight alpha is stored as is.
 @fragment
 fn fs_icon(in: VertexOut) -> @location(0) vec4<f32> {
-    let texel = sample_block(in.uv, in.layer, in.hires);
+    let texel = sample_block(in.uv, in.layer);
     if (texel.a < 0.1) {
         discard;
     }
@@ -238,7 +205,7 @@ fn fs_icon(in: VertexOut) -> @location(0) vec4<f32> {
 // blended with SrcAlpha/OneMinusSrcAlpha. No cutout: water uses partial alpha.
 @fragment
 fn fs_transparent(in: VertexOut) -> @location(0) vec4<f32> {
-    let texel = sample_block(in.uv, in.layer, in.hires);
+    let texel = sample_block(in.uv, in.layer);
     return vec4<f32>(shade_fragment(in, texel), texel.a);
 }
 
@@ -247,7 +214,7 @@ fn fs_transparent(in: VertexOut) -> @location(0) vec4<f32> {
 // the reference.
 @fragment
 fn fs_crack(in: VertexOut) -> @location(0) vec4<f32> {
-    let texel = sample_block(in.uv, in.layer, in.hires);
+    let texel = sample_block(in.uv, in.layer);
     if (texel.a < 0.1) {
         discard;
     }

@@ -16,14 +16,13 @@
 use cindral_protocol::packets::play::serverbound::DiggingStatus;
 use cindral_protocol::packets::play::{Facing, ItemStack};
 use cindral_world::BlockPos;
-use glam::DVec3;
 
 use crate::combat::attack_packets;
 use crate::digging::{self, Digger};
 use crate::entity::EntityId;
 use crate::gamemode::GameMode;
 use crate::raycast::{Face, RayHit};
-use crate::shapes::{Aabb, BlockSource};
+use crate::shapes::BlockSource;
 use crate::sound::block_events::{break_cue, HitSounds};
 use crate::sound::cue::SoundCue;
 
@@ -235,34 +234,23 @@ impl Interaction {
         output
     }
 
-    /// Places a block against the targeted face.
+    /// The packet of a click that places a block into `target`.
     ///
-    /// `player` is the bounding box of the player: a block inside it would
-    /// suffocate the player (the server applies the damage), so the
-    /// placement is skipped. The packet is sent in every mode, like MCP
-    /// `onPlayerRightClick`; only the confirmation is awaited when the mode
-    /// can place.
+    /// The caller has already checked `ItemBlock.canPlaceBlockOnSide`
+    /// (`crate::placement::can_place_on_side`). The packet is sent in every
+    /// mode, like MCP `onPlayerRightClick`; only the confirmation of
+    /// `target` is awaited when the mode can place.
     pub fn place_block(
         &mut self,
         mode: GameMode,
         hit: &RayHit,
-        player: Option<&Aabb>,
+        target: BlockPos,
         item: ItemStack,
-    ) -> Option<Outgoing> {
-        let face = wire_face(hit.face);
-        let offset = face_offset(face);
-        let target = BlockPos::new(
-            hit.block.x + offset.x,
-            hit.block.y + offset.y,
-            hit.block.z + offset.z,
-        );
-        if player.is_some_and(|player| player.intersects(&block_box(target))) {
-            return None;
-        }
+    ) -> Outgoing {
         if mode.can_place() {
             self.expected_placement = Some(target);
         }
-        Some(Self::block_click(hit, item))
+        Self::block_click(hit, item)
     }
 
     /// The packet of a click that the block itself consumes (a door, a chest,
@@ -326,16 +314,9 @@ impl<W: BlockSource + ?Sized> AttackRun<'_, '_, W> {
         self.output.packets.push(Outgoing::Swing);
     }
 
-    /// Whether the held item only swings at a block: a sword or a potion. The arm
-    /// swings, but no dig starts, so no crack, no chips, no hit sound and no break
-    /// show for a block that is not going to break.
-    fn swings_only(&self) -> bool {
-        self.tick.digger.held.is_some_and(|stack| {
-            digging::is_sword(stack.item_id) || digging::is_potion(stack.item_id)
-        })
-    }
-
-    /// MCP `Minecraft.clickMouse`.
+    /// MCP `Minecraft.clickMouse`. Every item digs, a sword and a potion
+    /// included (`PlayerControllerMP.clickBlock` has no exception for them;
+    /// a sword cuts cobwebs fast, `ItemSword.getStrVsBlock`).
     fn click(&mut self) {
         if let Some(entity) = self.tick.entity {
             self.output.packets.extend(attack_packets(entity));
@@ -343,7 +324,6 @@ impl<W: BlockSource + ?Sized> AttackRun<'_, '_, W> {
         }
         self.swing();
         match self.tick.target {
-            Some(_) if self.swings_only() => {}
             Some(hit) if self.block_id(hit.block) != 0 => {
                 self.click_block(&hit);
             }
@@ -362,11 +342,7 @@ impl<W: BlockSource + ?Sized> AttackRun<'_, '_, W> {
         }
         match self.tick.target {
             Some(hit) if self.tick.held && self.block_id(hit.block) != 0 => {
-                if self.swings_only() {
-                    // A dig left over from another item stops; the arm keeps swinging.
-                    self.reset();
-                    self.swing();
-                } else if self.damage_block(&hit) {
+                if self.damage_block(&hit) {
                     self.swing();
                 }
             }
@@ -505,12 +481,6 @@ impl<W: BlockSource + ?Sized> AttackRun<'_, '_, W> {
     }
 }
 
-/// The unit box of a block.
-fn block_box(block: BlockPos) -> Aabb {
-    let min = DVec3::new(f64::from(block.x), f64::from(block.y), f64::from(block.z));
-    Aabb::new(min, min + DVec3::ONE)
-}
-
 /// The offset of a face, in blocks.
 #[must_use]
 pub fn face_offset(face: Facing) -> BlockPos {
@@ -524,10 +494,16 @@ pub fn face_offset(face: Facing) -> BlockPos {
     }
 }
 
-/// The click offset in sixteenths of a block, clamped to `0..=15`.
+/// The click offset in sixteenths of a block, reproducing Minecraft Java 1.8.9:
+/// `(float)(hitVec.coord - (double)hitPos.coord)` followed by `buf.writeByte((int)(facingCoord * 16.0F))`.
+///
+/// In Java, the float difference is multiplied by 16.0F, cast to int (truncating
+/// towards zero, JLS §5.1.3), and written to the network buffer via `writeByte`
+/// which writes the lower 8 bits (Netty ByteBuf semantics).
 #[must_use]
 pub fn cursor(offset: f64) -> u8 {
-    (offset * 16.0).floor().clamp(0.0, 15.0) as u8
+    let facing = offset as f32;
+    ((facing * 16.0_f32) as i32) as u8
 }
 
 /// The wire face of a ray-cast face.
@@ -546,6 +522,7 @@ pub fn wire_face(face: Face) -> Facing {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::DVec3;
 
     fn hit(block: BlockPos, face: Face) -> RayHit {
         RayHit {
@@ -565,10 +542,27 @@ mod tests {
     }
 
     #[test]
-    fn the_cursor_is_clamped_to_a_block() {
-        assert_eq!(cursor(-0.5), 0);
-        assert_eq!(cursor(0.5), 8);
-        assert_eq!(cursor(1.0), 15);
+    fn the_cursor_matches_vanilla_conversion() {
+        // Minecraft Java 1.8.9 reference:
+        // float f = (float)(hitVec.coord - (double)hitPos.coord);
+        // buf.writeByte((int)(f * 16.0F));
+        //
+        // 9 mandatory differential test coordinates:
+        assert_eq!(cursor(0.0), 0); // 0.0 * 16 = 0 -> byte 0
+        assert_eq!(cursor(0.0625), 1); // 0.0625 * 16 = 1.0 -> byte 1
+        assert_eq!(cursor(0.5), 8); // 0.5 * 16 = 8.0 -> byte 8
+        assert_eq!(cursor(0.9375), 15); // 0.9375 * 16 = 15.0 -> byte 15
+        assert_eq!(cursor(1.0), 16); // 1.0 * 16 = 16.0 -> byte 16 (vanilla sends 16, not 15!)
+        assert_eq!(cursor(-0.0625), 255); // -0.0625 * 16 = -1.0 -> (int)-1 -> (byte)-1 -> 255 (0xFF)
+        assert_eq!(cursor(-0.5), 248); // -0.5 * 16 = -8.0 -> (int)-8 -> (byte)-8 -> 248 (0xF8)
+        assert_eq!(cursor(1.0625), 17); // 1.0625 * 16 = 17.0 -> byte 17
+        assert_eq!(cursor(1.5), 24); // 1.5 * 16 = 24.0 -> byte 24
+
+        // Truncation towards zero for values between -0.0625 and 0.0:
+        assert_eq!(cursor(-0.01), 0); // -0.01 * 16 = -0.16 -> (int)-0.16 = 0 -> byte 0
+        assert_eq!(cursor(0.01), 0); // 0.01 * 16 = 0.16 -> (int)0.16 = 0 -> byte 0
+        assert_eq!(cursor(-0.0624), 0); // -0.0624 * 16 = -0.9984 -> (int) = 0 -> byte 0
+        assert_eq!(cursor(0.0624), 0); // 0.0624 * 16 = 0.9984 -> (int) = 0 -> byte 0
     }
 
     #[test]
@@ -1004,15 +998,20 @@ mod tests {
     #[test]
     fn a_placement_targets_the_block_next_to_the_face() {
         let mut interaction = Interaction::new();
-        let placed = interaction.place_block(GameMode::Survival, &stone(), None, ItemStack::EMPTY);
+        let placed = interaction.place_block(
+            GameMode::Survival,
+            &stone(),
+            BlockPos::new(3, 5, 5),
+            ItemStack::EMPTY,
+        );
         assert_eq!(
             placed,
-            Some(Outgoing::Place {
+            Outgoing::Place {
                 block: BlockPos::new(3, 4, 5),
                 face: Facing::Up,
                 item: ItemStack::EMPTY,
-                cursor: [8, 15, 4],
-            })
+                cursor: [8, 16, 4],
+            }
         );
         assert_eq!(
             interaction.acknowledge_block(BlockPos::new(3, 5, 5)),
@@ -1021,24 +1020,14 @@ mod tests {
     }
 
     #[test]
-    fn a_block_inside_the_player_is_not_placed() {
-        let mut interaction = Interaction::new();
-        let player = block_box(BlockPos::new(3, 5, 5));
-        let placed = interaction.place_block(
-            GameMode::Survival,
-            &stone(),
-            Some(&player),
-            ItemStack::EMPTY,
-        );
-        assert_eq!(placed, None);
-        assert_eq!(interaction.acknowledge_block(BlockPos::new(3, 5, 5)), None);
-    }
-
-    #[test]
     fn a_spectator_click_is_sent_but_never_awaited() {
         let mut interaction = Interaction::new();
-        let placed = interaction.place_block(GameMode::Spectator, &stone(), None, ItemStack::EMPTY);
-        assert!(placed.is_some());
+        interaction.place_block(
+            GameMode::Spectator,
+            &stone(),
+            BlockPos::new(3, 5, 5),
+            ItemStack::EMPTY,
+        );
         assert_eq!(interaction.acknowledge_block(BlockPos::new(3, 5, 5)), None);
     }
 
@@ -1071,20 +1060,23 @@ mod tests {
         (interaction, outputs)
     }
 
+    /// Regression: a sword or a potion only swung at a block, with no
+    /// `Player Digging`; vanilla's `PlayerControllerMP.clickBlock` digs with
+    /// any item.
     #[test]
-    fn a_sword_or_a_potion_only_swings_at_a_block_in_every_mode() {
+    fn a_sword_or_a_potion_digs_like_any_item_in_survival() {
         for item in [276, 373] {
-            for mode in [GameMode::Survival, GameMode::Creative] {
-                let (interaction, outputs) = holding(item, mode);
-                for output in &outputs {
-                    assert!(dig_status(output).is_empty(), "item {item} in {mode:?}");
-                    assert!(output.broken.is_empty());
-                    assert!(output.sounds.is_empty(), "no hit sound");
-                    assert!(output.progress.is_none(), "no cracks");
-                    assert!(output.packets.contains(&Outgoing::Swing), "the arm swings");
-                }
-                assert_eq!(interaction.digging_block(), None, "no dig, so no chips");
-            }
+            let (interaction, outputs) = holding(item, GameMode::Survival);
+            assert_eq!(
+                dig_status(&outputs[0]),
+                [DiggingStatus::StartDestroyBlock],
+                "item {item}"
+            );
+            assert!(
+                outputs[0].packets.contains(&Outgoing::Swing),
+                "the arm swings"
+            );
+            assert_eq!(interaction.digging_block(), Some(BlockPos::new(3, 4, 5)));
         }
     }
 

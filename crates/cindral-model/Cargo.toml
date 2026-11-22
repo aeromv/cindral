@@ -8,8 +8,8 @@ license.workspace = true
 publish = false
 
 [dependencies]
+cindral-packext.workspace = true
 glam = "0.34"
-serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 cindral-world.workspace = true

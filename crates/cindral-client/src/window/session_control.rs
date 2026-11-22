@@ -13,11 +13,11 @@
 use super::App;
 use crate::accounts::Identity;
 use crate::args::Args;
-use crate::connection_end::{ConnectionEnd, EndPhase};
 use crate::game::{GameEvent, Session};
 use crate::network::NetworkConfig;
 use crate::options::Options;
-use crate::screen::Screen;
+use crate::screens::connection_end::{ConnectionEnd, EndPhase};
+use crate::screens::Screen;
 use crate::servers::{ResourcePackMode, ServerAddress};
 
 /// What the window does with the session this frame.
@@ -87,6 +87,8 @@ pub(super) fn network_config(
         chat_mode: options.chat.visibility.wire(),
         chat_colors: options.chat.colors,
         skin_parts: options.skin.parts_mask(),
+        brand: options.multiplayer.brand.clone(),
+        locale: options.language.code.clone(),
         handshake_host: args.handshake_host.clone().filter(|_| is_cli_server),
         decline_server_packs: pack_mode == ResourcePackMode::Disabled,
         account_skin: true,
@@ -140,6 +142,8 @@ impl App {
                 self.server_pack.set_mode(pack_mode);
                 self.session = Some(session);
                 self.send_particle_setting();
+                self.send_particle_categories();
+                self.send_legacy_animations();
                 self.set_screen(Screen::Connecting);
             }
             Err(error) => self.show_disconnected(&ConnectionEnd::other(
@@ -203,14 +207,14 @@ impl App {
     /// inventory, the text screens and the input that was waiting to be sent.
     fn forget_play_state(&mut self) {
         self.death_started = None;
-        self.respawn_requested = false;
+        self.presses.respawn = false;
         self.container_was_open = false;
-        self.last_input = crate::input::InputState::default();
-        self.anvil_field = crate::anvil_field::AnvilField::default();
-        self.text_screens = crate::text_screens::TextScreens::default();
+        self.input.last = crate::input::InputState::default();
+        self.anvil_field = crate::screens::anvil_field::AnvilField::default();
+        self.text_screens = crate::screens::text::TextScreens::default();
         self.inventory_input.reset();
         self.creative_input.reset();
-        self.buttons.clear();
+        self.input.buttons.clear();
     }
 }
 
@@ -274,6 +278,7 @@ mod tests {
         let mut options = Options::default();
         options.video.render_distance = 12;
         options.chat.colors = false;
+        options.multiplayer.brand = "vanilla".to_owned();
         let config = network_config(
             &args(&["--name", "Pixel"]),
             &options,
@@ -287,6 +292,7 @@ mod tests {
         assert_eq!(config.view_distance, 12);
         assert!(!config.chat_colors);
         assert_eq!(config.skin_parts, options.skin.parts_mask());
+        assert_eq!(config.brand, "vanilla");
     }
 
     #[test]

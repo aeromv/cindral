@@ -2,7 +2,6 @@
 
 //! The network thread body: runtime, connect, login, play.
 
-use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
@@ -15,9 +14,9 @@ use cindral_ui::menus::ConnectStage;
 use tokio::sync::mpsc::Receiver as CommandReceiver;
 
 use super::NetworkConfig;
-use crate::connection_end::{ConnectionEnd, EndPhase};
 use crate::error::ClientError;
 use crate::game::GameEvent;
+use crate::screens::connection_end::{ConnectionEnd, EndPhase};
 
 /// Starts the network thread and returns its join handle.
 ///
@@ -29,7 +28,7 @@ use crate::game::GameEvent;
 /// [`ClientError::Network`] when the OS refuses to start the thread.
 pub fn spawn(
     config: NetworkConfig,
-    events: Sender<GameEvent>,
+    events: crossbeam_channel::Sender<GameEvent>,
     commands: CommandReceiver<PlayServerbound>,
     counters: Arc<SessionCounters>,
 ) -> Result<JoinHandle<()>, ClientError> {
@@ -42,7 +41,7 @@ pub fn spawn(
 
 fn run_thread(
     config: NetworkConfig,
-    events: Sender<GameEvent>,
+    events: crossbeam_channel::Sender<GameEvent>,
     commands: CommandReceiver<PlayServerbound>,
     counters: &SessionCounters,
 ) {
@@ -71,7 +70,7 @@ fn run_thread(
 /// itself ended the session by dropping the command sender.
 async fn run_session(
     config: &NetworkConfig,
-    events: &Sender<GameEvent>,
+    events: &crossbeam_channel::Sender<GameEvent>,
     mut commands: CommandReceiver<PlayServerbound>,
     counters: &SessionCounters,
 ) -> Option<ConnectionEnd> {
@@ -117,15 +116,15 @@ async fn run_session(
         chat_mode: config.chat_mode,
         chat_colors: config.chat_colors,
         skin_parts: config.skin_parts,
+        brand: config.brand.clone(),
+        locale: config.locale.clone(),
         decline_server_packs: config.decline_server_packs,
-        ..PlayOptions::default()
     });
-    // The inbox is unbounded: this thread never waits for the game thread, so
-    // it keeps reading and answers Keep Alive at once. A closed inbox means
-    // the game thread is gone; the command channel closes with it and ends
-    // the loop.
+    // A full inbox blocks this thread in `send`, which slows the server down
+    // through TCP instead of losing world data. A closed inbox means the game
+    // thread is gone; the command channel closes with it and ends the loop.
     let forward = |event| {
-        let _ = events.send(GameEvent::Net(event, std::time::Instant::now()));
+        let _ = events.send(GameEvent::Net(event));
     };
     match drive(
         &mut connection,

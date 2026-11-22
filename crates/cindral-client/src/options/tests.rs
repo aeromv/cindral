@@ -4,6 +4,7 @@
 
 use winit::keyboard::KeyCode;
 
+use super::menu::TitleStyleSetting;
 use super::*;
 
 fn temp_folder(name: &str) -> PathBuf {
@@ -18,7 +19,10 @@ fn the_defaults_match_the_reference_game() {
     let options = Options::default();
     assert_eq!(options.video.fov, 70.0);
     assert_eq!(options.controls.mouse_sensitivity, 0.5);
-    assert!((options.controls.look_factor() - 1.0).abs() < 1e-5);
+    assert_eq!(
+        crate::input::mouse_look::sensitivity_factor(&options.controls, 1.0),
+        1.0
+    );
     assert_eq!(options.keys.get(Action::Forward), KeyCode::KeyW);
     assert_eq!(options.keys.get(Action::Command), KeyCode::Slash);
     assert_eq!(options.keys.get(Action::Hotbar9), KeyCode::Digit9);
@@ -135,7 +139,7 @@ fn out_of_range_numbers_are_clamped() {
     )
     .unwrap();
     let loaded = Options::load(&path);
-    assert_eq!(loaded.video.render_distance, 16);
+    assert_eq!(loaded.video.render_distance, *super::RENDER_DISTANCE.end());
     assert_eq!(loaded.video.fov, 110.0);
     assert_eq!(loaded.video.max_fps, 10);
     assert_eq!(loaded.controls.mouse_sensitivity, 1.0);

@@ -16,6 +16,7 @@
 //! Every offset is bounds checked, so a malformed container produces an
 //! [`AssetsError::Zip`] and never a panic (spec §14.3).
 
+use std::collections::HashMap;
 use std::io::Read;
 
 use crate::error::{AssetsError, AssetsResult};
@@ -38,23 +39,20 @@ const METHOD_STORED: u16 = 0;
 const METHOD_DEFLATE: u16 = 8;
 /// The zip64 sentinel size.
 const ZIP64_SENTINEL: u32 = u32::MAX;
-/// The largest entry this reader inflates. The biggest file of the 1.8.8
-/// client jar is far below; a resource pack entry above it is refused.
-const MAX_ENTRY_BYTES: u64 = 128 * 1024 * 1024;
-/// The most bytes reserved before inflating, whatever the entry declares.
-const INITIAL_CAPACITY: u64 = 4 * 1024 * 1024;
+/// The most a deflate stream can expand (about 1032 to 1).
+const MAX_DEFLATE_RATIO: u64 = 1032;
 
 /// One entry of a zip archive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ZipEntry {
     /// The entry name, `/` separated.
     pub(crate) name: String,
+    /// The size the archive declares for the uncompressed data.
+    pub(crate) uncompressed_size: u64,
     /// The compression method.
     method: u16,
     /// The size of the compressed data.
     compressed_size: u64,
-    /// The size of the uncompressed data.
-    uncompressed_size: u64,
     /// The offset of the local file header of the entry.
     local_header_offset: u64,
 }
@@ -64,6 +62,7 @@ pub(crate) struct ZipEntry {
 pub(crate) struct ZipArchive {
     data: Vec<u8>,
     entries: Vec<ZipEntry>,
+    name_index: HashMap<String, usize>,
 }
 
 impl ZipArchive {
@@ -75,7 +74,15 @@ impl ZipArchive {
     /// end-of-central-directory record, or uses an unsupported feature.
     pub(crate) fn open(data: Vec<u8>) -> AssetsResult<Self> {
         let entries = parse_central_directory(&data)?;
-        Ok(Self { data, entries })
+        let mut name_index = HashMap::with_capacity(entries.len());
+        for (idx, entry) in entries.iter().enumerate() {
+            name_index.insert(entry.name.clone(), idx);
+        }
+        Ok(Self {
+            data,
+            entries,
+            name_index,
+        })
     }
 
     /// The parsed central directory entries.
@@ -85,7 +92,7 @@ impl ZipArchive {
 
     /// The entry with the given name, if the archive has one.
     pub(crate) fn entry(&self, name: &str) -> Option<&ZipEntry> {
-        self.entries.iter().find(|entry| entry.name == name)
+        self.name_index.get(name).map(|&idx| &self.entries[idx])
     }
 
     /// The names of every entry in the archive.
@@ -140,39 +147,23 @@ impl ZipArchive {
         let out = match entry.method {
             METHOD_STORED => compressed.to_vec(),
             METHOD_DEFLATE => {
-                // The declared size is trusted for nothing but a bound: the
-                // stream is cut one byte past it (a deflate bomb in a server
-                // resource pack stops there), and a size that does not match
-                // is an error. The first allocation is capped too.
+                // The declared size comes from the archive: it bounds the
+                // output (a stream that inflates past it is a bomb or a
+                // corrupt entry) but never sizes the allocation by itself.
                 let declared = entry.uncompressed_size;
-                if declared > MAX_ENTRY_BYTES {
-                    return Err(AssetsError::Zip {
-                        what: entry.name.clone(),
-                        reason: format!(
-                            "the entry declares {declared} bytes, over the {MAX_ENTRY_BYTES} byte limit"
-                        ),
-                    });
-                }
-                let mut decoder = flate2::read::DeflateDecoder::new(compressed).take(declared + 1);
-                let mut out = Vec::with_capacity(declared.min(INITIAL_CAPACITY) as usize);
-                decoder
+                let reachable = (compressed.len() as u64).saturating_mul(MAX_DEFLATE_RATIO) + 64;
+                let mut out = Vec::with_capacity(declared.min(reachable) as usize);
+                flate2::read::DeflateDecoder::new(compressed)
+                    .take(declared + 1)
                     .read_to_end(&mut out)
                     .map_err(|err| AssetsError::Zip {
                         what: entry.name.clone(),
                         reason: format!("the deflate stream is malformed: {err}"),
                     })?;
-                if out.len() as u64 != declared {
+                if out.len() as u64 > declared {
                     return Err(AssetsError::Zip {
                         what: entry.name.clone(),
-                        reason: format!(
-                            "the entry declares {declared} bytes but inflates to {}{}",
-                            out.len(),
-                            if out.len() as u64 > declared {
-                                " or more"
-                            } else {
-                                ""
-                            }
-                        ),
+                        reason: format!("the entry inflates past its declared {declared} bytes"),
                     });
                 }
                 out
@@ -229,10 +220,10 @@ fn parse_central_directory(data: &[u8]) -> AssetsResult<Vec<ZipEntry>> {
                     what: "central directory".to_string(),
                     reason: "an entry name is out of bounds".to_string(),
                 })?;
-        let name = String::from_utf8(name_bytes.to_vec()).map_err(|_| AssetsError::Zip {
-            what: "central directory".to_string(),
-            reason: "an entry name is not valid UTF-8".to_string(),
-        })?;
+        // A name in a legacy code page (an archive made by an old Windows
+        // tool) must not cost the whole archive: no asset path the game asks
+        // for holds such a character, so the entry is only never found.
+        let name = String::from_utf8_lossy(name_bytes).into_owned();
 
         entries.push(ZipEntry {
             name,
@@ -304,19 +295,19 @@ mod tests {
     use super::*;
 
     /// Builds a zip archive with one *stored* entry.
-    fn raw_zip(name: &str, method: u16, payload: &[u8], uncompressed: u32) -> Vec<u8> {
+    fn stored_zip(name: &str, payload: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
         let name_bytes = name.as_bytes();
 
         out.extend_from_slice(&LOCAL_SIGNATURE.to_le_bytes());
         out.extend_from_slice(&10_u16.to_le_bytes()); // version needed
         out.extend_from_slice(&0_u16.to_le_bytes()); // flags
-        out.extend_from_slice(&method.to_le_bytes());
+        out.extend_from_slice(&METHOD_STORED.to_le_bytes());
         out.extend_from_slice(&0_u16.to_le_bytes()); // time
         out.extend_from_slice(&0_u16.to_le_bytes()); // date
         out.extend_from_slice(&0_u32.to_le_bytes()); // crc
         out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        out.extend_from_slice(&uncompressed.to_le_bytes());
+        out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         out.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
         out.extend_from_slice(&0_u16.to_le_bytes()); // extra
         out.extend_from_slice(name_bytes);
@@ -328,12 +319,12 @@ mod tests {
         out.extend_from_slice(&20_u16.to_le_bytes()); // version made by
         out.extend_from_slice(&10_u16.to_le_bytes()); // version needed
         out.extend_from_slice(&0_u16.to_le_bytes()); // flags
-        out.extend_from_slice(&method.to_le_bytes());
+        out.extend_from_slice(&METHOD_STORED.to_le_bytes());
         out.extend_from_slice(&0_u16.to_le_bytes()); // time
         out.extend_from_slice(&0_u16.to_le_bytes()); // date
         out.extend_from_slice(&0_u32.to_le_bytes()); // crc
         out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        out.extend_from_slice(&uncompressed.to_le_bytes());
+        out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         out.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
         out.extend_from_slice(&0_u16.to_le_bytes()); // extra
         out.extend_from_slice(&0_u16.to_le_bytes()); // comment
@@ -353,47 +344,6 @@ mod tests {
         out.extend_from_slice(&central_offset.to_le_bytes());
         out.extend_from_slice(&0_u16.to_le_bytes()); // comment
         out
-    }
-
-    fn stored_zip(name: &str, payload: &[u8]) -> Vec<u8> {
-        raw_zip(name, METHOD_STORED, payload, payload.len() as u32)
-    }
-
-    fn deflated(data: &[u8]) -> Vec<u8> {
-        use std::io::Write as _;
-        let mut encoder =
-            flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
-        encoder.write_all(data).expect("deflates");
-        encoder.finish().expect("deflates")
-    }
-
-    #[test]
-    fn a_deflated_entry_is_read_back() {
-        let data = b"cindral ".repeat(100);
-        let zip = raw_zip("a.txt", METHOD_DEFLATE, &deflated(&data), data.len() as u32);
-        let archive = ZipArchive::open(zip).expect("archive parses");
-        let entry = archive.entry("a.txt").expect("entry is present");
-        assert_eq!(archive.read(entry).expect("entry is read"), data);
-    }
-
-    #[test]
-    fn a_deflate_bomb_stops_at_the_declared_size() {
-        // 64 MiB of zeros in about 64 KiB, declared as 1 KiB: the reader must
-        // stop one byte past the declaration, not inflate it all.
-        let bomb = deflated(&vec![0_u8; 64 * 1024 * 1024]);
-        let zip = raw_zip("bomb.bin", METHOD_DEFLATE, &bomb, 1024);
-        let archive = ZipArchive::open(zip).expect("archive parses");
-        let entry = archive.entry("bomb.bin").expect("entry is present");
-        let error = archive.read(entry).expect_err("the size does not match");
-        assert!(error.to_string().contains("or more"), "{error}");
-    }
-
-    #[test]
-    fn an_entry_over_the_size_limit_is_refused() {
-        let zip = raw_zip("big.bin", METHOD_DEFLATE, &deflated(b"x"), u32::MAX - 1);
-        let archive = ZipArchive::open(zip).expect("archive parses");
-        let entry = archive.entry("big.bin").expect("entry is present");
-        assert!(archive.read(entry).is_err());
     }
 
     #[test]

@@ -32,8 +32,8 @@ mod overlay_views;
 mod state;
 
 pub use cindral_ui::mod_widget::{
-    measure as measure_mod_widget, LineIcon, ModCell, ModLine, ModWidgetView, ShadowStyle,
-    WidgetStyle,
+    measure as measure_mod_widget, measure_view as measure_mod_widget_view, ModCell, ModIcon,
+    ModLabel, ModLine, ModTick, ModWidgetView, ShadowStyle, WidgetStyle,
 };
 pub use gui::{chat_input_hit, chat_run_at, draw_hud_gui, HudSheets, InputHit};
 pub use overlay_views::{
@@ -41,6 +41,6 @@ pub use overlay_views::{
     TabValueStyle, TitleView,
 };
 pub use state::{
-    ChatInputView, ChatLineView, ChatRunView, ChatStyle, CombatFacts, DebugF3View, HudState,
-    ModFacts, HOTBAR_SLOTS,
+    ChatInputView, ChatLineView, ChatRunView, ChatStyle, DebugF3View, HudState, LagometerView,
+    HOTBAR_SLOTS,
 };

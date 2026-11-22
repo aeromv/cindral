@@ -18,7 +18,7 @@ fn widget(id: &str, position: [f32; 2]) -> HudWidgetView {
             lines: vec![ModLine::new("60 FPS", 0xFFFFFF)],
             position,
             scale: 1.0,
-            style: Default::default(),
+            ..ModWidgetView::default()
         },
     }
 }
@@ -29,6 +29,7 @@ fn view_with(widgets: Vec<HudWidgetView>) -> ModsView {
             widgets,
             screen: SCREEN,
             scale_range: (0.5, 3.0),
+            ..HudEditorView::default()
         },
         ..view()
     }
@@ -94,35 +95,19 @@ fn a_drag_that_starts_under_the_panel_places_nothing() {
 
 #[test]
 fn a_widget_beside_the_open_panel_is_still_movable() {
+    // The panel fills the width of the test screen; the hotbar strip under it
+    // is free.
     let panel = mods_layout(VIEWPORT).panel;
-    let position = [2.0, 2.0];
-    assert!(inside(position)[0] < panel.x);
+    let position = [100.0, 215.0];
+    assert!(inside(position)[1] > panel.bottom());
     let view = view_with(vec![widget("fps", position)]);
     let outcome = drag_from(&mut on_list(), &view, inside(position));
     let Some(ModsOutcome::Hud(HudEditorOutcome::Placed { id, rect, .. })) = outcome else {
         panic!("expected a placement, got {outcome:?}");
     };
     assert_eq!(id, "fps");
-    assert_eq!(rect.x, 12.0);
-    assert!((rect.y - (2.0 + 20.0 / SCALE)).abs() < 1e-3, "{}", rect.y);
-}
-
-#[test]
-fn the_reset_bar_is_under_the_panel() {
-    let view = view_with(vec![widget("fps", [20.0, 20.0])]);
-    let list = texts(&mut on_list(), &view);
-    assert!(has_text(&list, "cindral.mods.editor.reset_all"));
-}
-
-#[test]
-fn the_panel_says_how_to_move_widgets_only_when_there_is_one() {
-    let with = texts(
-        &mut on_list(),
-        &view_with(vec![widget("fps", [20.0, 20.0])]),
-    );
-    assert!(has_text(&with, "cindral.mods.editor.hint"), "{with:?}");
-    let none = texts(&mut on_list(), &view());
-    assert!(!has_text(&none, "cindral.mods.editor.hint"), "{none:?}");
+    assert_eq!(rect.x, 110.0);
+    assert!((rect.y - (215.0 + 20.0 / SCALE)).abs() < 1e-3, "{}", rect.y);
 }
 
 #[test]

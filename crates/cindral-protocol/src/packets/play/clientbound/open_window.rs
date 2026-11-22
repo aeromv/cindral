@@ -8,7 +8,7 @@
 //! |---|---|---|
 //! | window id | u8 | |
 //! | inventory type | String(32) | e.g. `"minecraft:chest"`, `"EntityHorse"` |
-//! | window title | String(32767) | JSON chat component |
+//! | window title | String(32767) | JSON chat component (`readChatComponent`) |
 //! | slot count | u8 | |
 //! | entity id | i32 | present only when `inventory_type == "EntityHorse"` |
 
@@ -112,6 +112,22 @@ mod tests {
             title: r#"{"text":"Horse"}"#.to_string(),
             slot_count: 2,
             entity_id: Some(42),
+        };
+        assert_eq!(round_trip(&packet), packet);
+    }
+
+    #[test]
+    fn large_custom_window_title_round_trips() {
+        let large_title = format!(
+            r#"{{"text":"","extra":[{{"text":"Custom Shop Menu ","color":"gold","bold":true}},{{"text":"{}"}}]}}"#,
+            "Item Details ".repeat(50)
+        );
+        let packet = OpenWindow {
+            window_id: 3,
+            window_type: "minecraft:chest".to_string(),
+            title: large_title,
+            slot_count: 54,
+            entity_id: None,
         };
         assert_eq!(round_trip(&packet), packet);
     }

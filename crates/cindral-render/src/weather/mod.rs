@@ -126,6 +126,13 @@ impl WeatherRenderer {
         environment: RenderEnvironment,
         ticks: f64,
     ) {
+        if !falls(&environment, self.field.is_empty()) {
+            if !self.mesh.vertices.is_empty() {
+                self.mesh.vertices.clear();
+                self.mesh.runs.clear();
+            }
+            return;
+        }
         let input = FrameInput {
             eye: camera.eye(),
             origin: camera.render_origin(),
@@ -144,13 +151,14 @@ impl WeatherRenderer {
     }
 
     /// Draws the frame's runs with the terrain's camera bind group.
-    pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass<'_>, camera: &wgpu::BindGroup) {
+    pub(crate) fn draw(&self, pass: &mut wgpu::RenderPass<'_>, camera: &wgpu::BindGroup) -> u32 {
         if self.mesh.runs.is_empty() {
-            return;
+            return 0;
         }
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, camera, &[]);
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        let mut draws = 0;
         for run in &self.mesh.runs {
             let picture = match run.kind {
                 Precipitation::Rain => &self.rain,
@@ -158,8 +166,22 @@ impl WeatherRenderer {
             };
             pass.set_bind_group(1, picture, &[]);
             pass.draw(run.vertices.clone(), 0..1);
+            draws += 1;
         }
+        draws
     }
+
+    /// Number of active weather vertices uploaded this frame.
+    pub(crate) fn vertex_count(&self) -> usize {
+        self.mesh.vertices.len()
+    }
+}
+
+/// Whether any rain or snow is drawn: the option is on, it is raining and
+/// there are columns to fall on. Rain & Snow Off only hides the quads; the
+/// splashes and the sounds come from other systems.
+fn falls(environment: &RenderEnvironment, no_columns: bool) -> bool {
+    environment.draw_precipitation && environment.rain_strength > 0.0 && !no_columns
 }
 
 /// The bind layout of a picture: texture and sampler.
@@ -274,6 +296,24 @@ fn pipeline(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rain_off_draws_nothing_even_in_a_storm() {
+        let storm = RenderEnvironment {
+            rain_strength: 1.0,
+            ..RenderEnvironment::DEFAULT
+        };
+        assert!(falls(&storm, false));
+        assert!(!falls(
+            &RenderEnvironment {
+                draw_precipitation: false,
+                ..storm
+            },
+            false
+        ));
+        assert!(!falls(&RenderEnvironment::DEFAULT, false));
+        assert!(!falls(&storm, true));
+    }
 
     /// The shader is only compiled on a GPU device; this validates it without one.
     #[test]

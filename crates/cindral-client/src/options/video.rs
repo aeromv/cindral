@@ -5,14 +5,23 @@
 //! brightness, view bobbing, mipmaps, vsync, fullscreen, block alternatives
 //! and entity shadows.
 //!
-//! Defaults and ranges follow MCP `GameSettings`. Which of them drive the
-//! renderer and which are only stored is listed in `docs/parity.md`.
+//! Defaults and ranges follow MCP `GameSettings`, except the render distance,
+//! which goes up to 32 chunks as in OptiFine (ADR-0089). Which of them drive
+//! the renderer and which are only stored is listed in `docs/parity.md`. How
+//! each one is shown and applied is described by `video_spec`.
 
 use cindral_render::CloudMode;
 use serde::{Deserialize, Deserializer, Serialize};
 
-/// The render distance range, in chunks.
-pub const RENDER_DISTANCE: std::ops::RangeInclusive<u8> = 2..=16;
+use super::video_sections::{
+    lenient, AnimationOptions, DetailOptions, OffFastFancy, OtherOptions, PerformanceOptions,
+    QualityOptions,
+};
+
+/// The render distance range, in chunks. Vanilla stops at 16; OptiFine, and
+/// Cindral (ADR-0089), go to 32. A server sends no more than its own view
+/// distance, so the extra range only matters where the server allows it.
+pub const RENDER_DISTANCE: std::ops::RangeInclusive<u8> = 2..=32;
 /// The field-of-view range, in degrees.
 pub const FOV: std::ops::RangeInclusive<f32> = 30.0..=110.0;
 /// The frame-rate cap range; the top value means "unlimited".
@@ -32,9 +41,6 @@ pub const MIPMAP_LEVELS: std::ops::RangeInclusive<u8> = 0..=4;
 /// The render distance below which vanilla draws no clouds
 /// (`GameSettings.func_181147_e`).
 pub const MIN_CLOUD_DISTANCE: u8 = 4;
-
-/// The render scale range, in percent of the screen resolution.
-pub const RENDER_SCALE: std::ops::RangeInclusive<u8> = 25..=100;
 
 /// The most mesh threads the options accept.
 pub const MAX_MESH_THREADS: u8 = 32;
@@ -86,22 +92,32 @@ pub struct VideoOptions {
     /// `GameSettings.field_181151_V` ("Entity Shadows").
     pub entity_shadows: bool,
     /// Threads that mesh the chunks: `0` picks all cores but one (at least one),
-    /// anything else is used as given, up to [`MAX_MESH_THREADS`]. Only in
-    /// `options.toml`, there is no menu entry.
+    /// anything else is used as given, up to [`MAX_MESH_THREADS`].
     pub mesh_threads: u8,
-    /// Merge neighbouring terrain faces that look the same into larger ones
-    /// (`cindral_mesh::merge_faces`). Not a vanilla option: it changes no
-    /// pixel but cuts the vertices to draw, the main cost on a weak or
-    /// software GPU.
-    pub merge_faces: bool,
-    /// The resolution the world is drawn at, in percent of the screen
-    /// (`Renderer::set_render_scale`); the hand and the HUD stay sharp. Not a
-    /// vanilla option: the largest saving on a weak or software GPU.
-    pub render_scale: u8,
-    /// Fast Render (`Renderer::set_fast_render`): the terrain's light and fog
-    /// per vertex instead of per pixel. Not a vanilla option; experimental, no
-    /// preset turns it on (no gain measured on a software rasterizer).
-    pub fast_render: bool,
+    /// Whether the sections hidden behind solid terrain are skipped (the
+    /// cave visibility graph of ADR-0062). Off draws every section in the
+    /// frustum, which is only useful to compare.
+    pub cave_culling: bool,
+    /// Light carried by entities (OptiFine's Dynamic Lights): a held torch,
+    /// a burning mob. Off is vanilla; Fast updates the light less often than
+    /// Fancy.
+    pub dynamic_lights: OffFastFancy,
+    /// `[video.details]`. The subsections come last: TOML writes plain
+    /// values before tables.
+    #[serde(deserialize_with = "lenient")]
+    pub details: DetailOptions,
+    /// `[video.quality]`.
+    #[serde(deserialize_with = "lenient")]
+    pub quality: QualityOptions,
+    /// `[video.animations]`.
+    #[serde(deserialize_with = "lenient")]
+    pub animations: AnimationOptions,
+    /// `[video.performance]`.
+    #[serde(deserialize_with = "lenient")]
+    pub performance: PerformanceOptions,
+    /// `[video.other]`.
+    #[serde(deserialize_with = "lenient")]
+    pub other: OtherOptions,
 }
 
 /// Reads the cloud setting as a number, or as the boolean of the files that
@@ -157,9 +173,6 @@ impl VideoOptions {
         self.mipmap_levels = self
             .mipmap_levels
             .clamp(*MIPMAP_LEVELS.start(), *MIPMAP_LEVELS.end());
-        self.render_scale = self
-            .render_scale
-            .clamp(*RENDER_SCALE.start(), *RENDER_SCALE.end());
         self.fov = if self.fov.is_finite() {
             self.fov.clamp(*FOV.start(), *FOV.end())
         } else {
@@ -170,24 +183,57 @@ impl VideoOptions {
         } else {
             defaults.gamma
         };
+        self.details.clamp();
+        self.performance.clamp();
     }
 }
 
-/// A set of video options for a class of machine (not in vanilla).
+impl Default for VideoOptions {
+    fn default() -> Self {
+        Self {
+            render_distance: 8,
+            fov: 70.0,
+            max_fps: 120,
+            fancy_graphics: true,
+            clouds: MAX_CLOUD_SETTING,
+            particles: 0,
+            smooth_lighting: MAX_SMOOTH_LIGHTING,
+            gui_scale: 0,
+            gamma: 0.0,
+            view_bobbing: true,
+            dynamic_fov: true,
+            mipmap_levels: *MIPMAP_LEVELS.end(),
+            vsync: true,
+            fullscreen: false,
+            block_alternatives: true,
+            entity_shadows: true,
+            mesh_threads: 0,
+            cave_culling: true,
+            dynamic_lights: OffFastFancy::Off,
+            details: DetailOptions::default(),
+            quality: QualityOptions::default(),
+            animations: AnimationOptions::default(),
+            performance: PerformanceOptions::default(),
+            other: OtherOptions::default(),
+        }
+    }
+}
+
+/// A set of video options for a kind of machine, picked on the first start
+/// from the graphics device or asked for with `--preset`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoPreset {
     /// For a machine without a GPU (software rasterizer) or a very weak one:
-    /// the world at half resolution, render distance 6, flat lighting, no
-    /// clouds, minimal particles, fast graphics, no entity shadows.
+    /// render distance 6, flat lighting, no clouds, minimal particles, fast
+    /// graphics, no entity shadows.
     Low,
-    /// For an integrated GPU: the world at 75 %, render distance 8, minimum
-    /// smooth lighting, fast clouds, decreased particles.
+    /// For an integrated GPU: render distance 8, minimum smooth lighting,
+    /// fast clouds, decreased particles.
     Medium,
     /// The reference defaults.
     High,
-    /// For PvP on any machine: full resolution (aim needs a sharp picture),
-    /// render distance 4, no frame cap and no vsync, flat lighting, no clouds,
-    /// decreased particles.
+    /// For PvP on any machine: render distance 4, no frame cap and no vsync,
+    /// flat lighting, no clouds, decreased particles.
     Pvp,
 }
 
@@ -216,63 +262,32 @@ impl VideoPreset {
     }
 
     /// Sets the options this preset is about; the others (FOV, brightness,
-    /// GUI scale, frame cap, vsync, fullscreen) are left as they are.
+    /// GUI scale, fullscreen) are left as they are.
     pub fn apply(self, video: &mut VideoOptions) {
         let high = VideoOptions::default();
-        let (distance, scale, lighting, clouds, particles) = match self {
-            Self::Low => (6, 50, 0, 0, MAX_PARTICLE_SETTING),
-            Self::Medium => (8, 75, 1, 1, 1),
-            Self::Pvp => (4, 100, 0, 0, 1),
+        let (distance, lighting, clouds, particles) = match self {
+            Self::Low => (6, 0, 0, MAX_PARTICLE_SETTING),
+            Self::Medium => (8, 1, 1, 1),
+            Self::Pvp => (4, 0, 0, 1),
             Self::High => (
                 high.render_distance,
-                high.render_scale,
                 high.smooth_lighting,
                 high.clouds,
                 high.particles,
             ),
         };
         video.render_distance = distance;
-        video.render_scale = scale;
         video.smooth_lighting = lighting;
         video.clouds = clouds;
         video.particles = particles;
         let light = matches!(self, Self::Low | Self::Pvp);
         video.fancy_graphics = !light;
         video.entity_shadows = !light;
-        // One texture per block face lets more neighbouring faces merge.
         video.block_alternatives = !light;
         video.mipmap_levels = if light { 2 } else { high.mipmap_levels };
-        video.merge_faces = true;
         if self == Self::Pvp {
             video.vsync = false;
             video.max_fps = UNLIMITED_FPS;
-        }
-    }
-}
-
-impl Default for VideoOptions {
-    fn default() -> Self {
-        Self {
-            render_distance: 8,
-            fov: 70.0,
-            max_fps: 120,
-            fancy_graphics: true,
-            clouds: MAX_CLOUD_SETTING,
-            particles: 0,
-            smooth_lighting: MAX_SMOOTH_LIGHTING,
-            gui_scale: 0,
-            gamma: 0.0,
-            view_bobbing: true,
-            dynamic_fov: true,
-            mipmap_levels: *MIPMAP_LEVELS.end(),
-            vsync: true,
-            fullscreen: false,
-            block_alternatives: true,
-            entity_shadows: true,
-            mesh_threads: 0,
-            merge_faces: true,
-            render_scale: *RENDER_SCALE.end(),
-            fast_render: false,
         }
     }
 }
@@ -292,73 +307,6 @@ mod tests {
         assert!(video.dynamic_fov, "vanilla always widens the view");
         assert_eq!(video.mipmap_levels, 4);
         assert!(video.block_alternatives && video.entity_shadows);
-    }
-
-    #[test]
-    fn a_first_start_without_a_graphics_card_picks_a_lighter_preset() {
-        use cindral_render::AdapterKind;
-        assert_eq!(
-            VideoPreset::for_adapter(AdapterKind::Software),
-            Some(VideoPreset::Low)
-        );
-        assert_eq!(
-            VideoPreset::for_adapter(AdapterKind::Integrated),
-            Some(VideoPreset::Medium)
-        );
-        assert_eq!(VideoPreset::for_adapter(AdapterKind::Discrete), None);
-        assert_eq!(VideoPreset::for_adapter(AdapterKind::Other), None);
-    }
-
-    #[test]
-    fn the_presets_set_their_options_and_keep_the_others() {
-        let mut video = VideoOptions {
-            fov: 90.0,
-            max_fps: 60,
-            ..VideoOptions::default()
-        };
-        VideoPreset::Low.apply(&mut video);
-        assert_eq!(video.render_scale, 50);
-        assert_eq!(video.render_distance, 6);
-        assert_eq!(video.smooth_lighting, 0);
-        assert_eq!(video.cloud_mode(), CloudMode::Off);
-        assert!(!video.fancy_graphics && !video.entity_shadows && video.merge_faces);
-        assert_eq!(
-            (video.fov, video.max_fps),
-            (90.0, 60),
-            "not part of a preset"
-        );
-
-        VideoPreset::High.apply(&mut video);
-        let high = VideoOptions {
-            fov: 90.0,
-            max_fps: 60,
-            ..VideoOptions::default()
-        };
-        assert_eq!(video, high, "High is the reference defaults");
-        assert_eq!(VideoPreset::parse("LOW"), Some(VideoPreset::Low));
-        assert_eq!(VideoPreset::parse("ultra"), None);
-    }
-
-    #[test]
-    fn the_pvp_preset_is_sharp_near_and_uncapped() {
-        let mut video = VideoOptions::default();
-        VideoPreset::Pvp.apply(&mut video);
-        assert_eq!(video.render_scale, 100, "aim needs the full resolution");
-        assert_eq!(video.render_distance, 4);
-        assert_eq!(video.max_fps, UNLIMITED_FPS);
-        assert!(!video.vsync && video.merge_faces && !video.fast_render);
-        assert_eq!(VideoPreset::parse("PvP"), Some(VideoPreset::Pvp));
-    }
-
-    #[test]
-    fn the_render_scale_is_clamped() {
-        let mut options = Options::default();
-        options.video.render_scale = 5;
-        options.clamp();
-        assert_eq!(options.video.render_scale, 25);
-        options.video.render_scale = 250;
-        options.clamp();
-        assert_eq!(options.video.render_scale, 100);
     }
 
     #[test]

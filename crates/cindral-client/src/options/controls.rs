@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The mouse options: look sensitivity and inversion.
+//! The input options: look sensitivity, inversion and the advanced item
+//! tooltips (F3 + H).
 
 use serde::{Deserialize, Serialize};
 
-/// The mouse options.
+/// The mouse options and the advanced-tooltips switch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ControlOptions {
@@ -12,6 +13,9 @@ pub struct ControlOptions {
     pub mouse_sensitivity: f32,
     /// Whether moving the mouse up looks down.
     pub invert_mouse: bool,
+    /// Whether item tooltips show the advanced lines (F3 + H); vanilla keeps
+    /// it with the other options (`GameSettings.advancedItemTooltips`).
+    pub advanced_tooltips: bool,
 }
 
 impl Default for ControlOptions {
@@ -19,23 +23,16 @@ impl Default for ControlOptions {
         Self {
             mouse_sensitivity: 0.5,
             invert_mouse: false,
+            advanced_tooltips: false,
         }
-    }
-}
-
-impl ControlOptions {
-    /// The multiplier of the base look speed. It is the vanilla formula
-    /// `(sensitivity * 0.6 + 0.2)^3 * 8`, which is exactly `1.0` at the
-    /// default sensitivity.
-    #[must_use]
-    pub fn look_factor(&self) -> f32 {
-        (self.mouse_sensitivity * 0.6 + 0.2).powi(3) * 8.0
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::input::mouse_look::sensitivity_factor;
 
     #[test]
     fn the_look_factor_grows_with_the_sensitivity() {
@@ -47,8 +44,9 @@ mod tests {
             mouse_sensitivity: 1.0,
             ..ControlOptions::default()
         };
-        assert!(low.look_factor() < ControlOptions::default().look_factor());
-        assert!(ControlOptions::default().look_factor() < high.look_factor());
-        assert!(low.look_factor() > 0.0);
+        let factor = |controls: &ControlOptions| sensitivity_factor(controls, 1.0);
+        assert!(factor(&low) < factor(&ControlOptions::default()));
+        assert!(factor(&ControlOptions::default()) < factor(&high));
+        assert!(factor(&low) > 0.0);
     }
 }

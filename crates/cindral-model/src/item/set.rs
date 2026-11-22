@@ -19,6 +19,8 @@ use crate::model::ResourceSource;
 const FRAME_MODEL: &str = "block/item_frame";
 /// The model of an item frame holding a map (variant `map`).
 const MAP_FRAME_MODEL: &str = "block/item_frame_map";
+/// The burning furnace, which has no item but shows in a furnace minecart.
+const LIT_FURNACE_MODEL: &str = "block/lit_furnace";
 
 use super::generated::{generate_elements, SpriteMask, MAX_LAYERS};
 use super::names::ITEM_MODEL_NAMES;
@@ -66,9 +68,13 @@ pub type SpriteLookup<'a> = &'a dyn Fn(&str) -> Option<SpriteMask>;
 #[derive(Debug, Default)]
 pub struct ItemModelSet {
     by_name: HashMap<&'static str, Arc<ItemModel>>,
+    /// The models a resource pack adds beyond the name table
+    /// ([`Self::add_named`]).
+    extra: HashMap<String, Arc<ItemModel>>,
     texture_keys: BTreeSet<String>,
     frame: Vec<ModelQuad>,
     map_frame: Vec<ModelQuad>,
+    lit_furnace: Vec<ModelQuad>,
 }
 
 impl ItemModelSet {
@@ -95,6 +101,10 @@ impl ItemModelSet {
         }
         set.frame = set.bake_block_model(&mut loader, FRAME_MODEL)?;
         set.map_frame = set.bake_block_model(&mut loader, MAP_FRAME_MODEL)?;
+        // Optional: a source without it only loses the lit furnace of carts.
+        set.lit_furnace = set
+            .bake_block_model(&mut loader, LIT_FURNACE_MODEL)
+            .unwrap_or_default();
         Ok(set)
     }
 
@@ -167,6 +177,25 @@ impl ItemModelSet {
         )
     }
 
+    /// Bakes the model `models/item/<name>.json` of `source`, which is not in
+    /// the name table, and keeps it under `name` for [`Self::model_by_name`].
+    /// Resource packs use this for the item models of Custom Items.
+    ///
+    /// # Errors
+    /// [`crate::ModelError`] for an unreadable or malformed model, an
+    /// unresolved texture or a parent cycle. The set is unchanged then.
+    pub fn add_named(
+        &mut self,
+        source: &dyn ResourceSource,
+        sprites: SpriteLookup<'_>,
+        name: &str,
+    ) -> ModelResult<()> {
+        let mut loader = ModelLoader::new(source);
+        let model = self.bake(&mut loader, name, sprites)?;
+        self.extra.insert(name.to_string(), Arc::new(model));
+        Ok(())
+    }
+
     /// The model registered for an item and its damage value.
     ///
     /// Applies the mesher's rules: a damageable item ignores its damage
@@ -192,10 +221,20 @@ impl ItemModelSet {
         }
     }
 
+    /// The quads of the burning furnace block (`block/lit_furnace`, facing
+    /// north), in block space; empty when the source has no such model.
+    #[must_use]
+    pub fn lit_furnace_quads(&self) -> &[ModelQuad] {
+        &self.lit_furnace
+    }
+
     /// The model with a given name, e.g. the in-use `bow_pulling_1`.
     #[must_use]
     pub fn model_by_name(&self, name: &str) -> Option<&ItemModel> {
-        self.by_name.get(name).map(Arc::as_ref)
+        self.by_name
+            .get(name)
+            .or_else(|| self.extra.get(name))
+            .map(Arc::as_ref)
     }
 
     /// Concrete texture keys referenced by any baked quad.
@@ -204,10 +243,10 @@ impl ItemModelSet {
         &self.texture_keys
     }
 
-    /// Number of distinct baked models.
+    /// Number of distinct baked models, the pack-added ones included.
     #[must_use]
     pub fn model_count(&self) -> usize {
-        self.by_name.len()
+        self.by_name.len() + self.extra.len()
     }
 }
 

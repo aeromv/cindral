@@ -18,8 +18,9 @@ use crate::draw::TextStyle;
 use crate::geom::Rect;
 use crate::id::WidgetId;
 use crate::text::FontAtlas;
+use crate::theme::{ControlState, WidgetSkin};
 
-use super::{chrome, style};
+use super::style;
 
 /// Draws a push button and reports its interaction state.
 ///
@@ -93,17 +94,17 @@ pub fn button_tinted(
         ui.note_button_press();
     }
 
-    if ui.modern_chrome() {
-        let look = if !enabled {
-            chrome::ButtonLook::Disabled
-        } else if response.clicked || response.hovered {
-            chrome::ButtonLook::Hover
-        } else {
-            chrome::ButtonLook::Rest
+    if let WidgetSkin::Flat(skin) = ui.theme().widgets {
+        let state = match (enabled, response.hovered) {
+            (false, _) => ControlState::Disabled,
+            (true, true) => ControlState::Hovered,
+            (true, false) => ControlState::Idle,
         };
-        let scale = (rect.height / 20.0).max(1.0);
-        chrome::button_body(ui, rect, scale, look);
-    } else if let Some(sheet) = ui.widgets_sheet() {
+        skin.draw_button(ui, rect, (atlas, label), state, tint);
+        return response;
+    }
+
+    if let Some(sheet) = ui.widgets_sheet() {
         let v_y = if !enabled {
             46
         } else if response.clicked || response.hovered {
@@ -165,24 +166,12 @@ pub fn button_tinted(
 
     ui.push_clip(rect);
     if ui.widgets_sheet().is_some() {
-        let shade = |c: [f32; 4]| [c[0] * 0.25, c[1] * 0.25, c[2] * 0.25, 1.0];
-        let modern = ui.modern_chrome();
         let (text_color, shadow_color) = if !enabled {
-            if modern {
-                (chrome::LABEL_DISABLED, shade(chrome::LABEL_DISABLED))
-            } else {
-                ([0.627, 0.627, 0.627, 1.0], [0.157, 0.157, 0.157, 1.0])
-            }
+            ([0.627, 0.627, 0.627, 1.0], [0.157, 0.157, 0.157, 1.0])
         } else if let Some(tint) = tint {
-            (tint, shade(tint))
+            (tint, [tint[0] * 0.25, tint[1] * 0.25, tint[2] * 0.25, 1.0])
         } else if response.hovered {
-            if modern {
-                (chrome::LABEL_HOVER, shade(chrome::LABEL_HOVER))
-            } else {
-                ([1.0, 1.0, 0.627, 1.0], [0.25, 0.25, 0.15, 1.0])
-            }
-        } else if modern {
-            (chrome::LABEL, shade(chrome::LABEL))
+            ([1.0, 1.0, 0.627, 1.0], [0.25, 0.25, 0.15, 1.0])
         } else {
             ([0.878, 0.878, 0.878, 1.0], [0.22, 0.22, 0.22, 1.0])
         };

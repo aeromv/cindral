@@ -7,7 +7,7 @@ use thiserror::Error;
 use cindral_render::{FontAtlasError, RenderError};
 use cindral_world::WorldError;
 
-use crate::model_resources::ModelResourcesError;
+use crate::resources::models::ModelResourcesError;
 
 /// Fatal client failure.
 #[derive(Debug, Error)]

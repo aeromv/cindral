@@ -2,7 +2,8 @@
 
 //! `Disconnect` (0x00, clientbound, login state): kick reason as chat JSON.
 //!
-//! Layout (`wiki.vg`, protocol 47): one chat JSON String (32767-char cap, `readChatComponent`)
+//! Layout (`wiki.vg`, protocol 47, MCP `S00PacketDisconnect`): one String
+//! (capped at 32767 chars / `MAX_JSON_CHARS`, read via `readChatComponent`)
 //! carrying a chat component.
 
 use std::io::{Read, Write};
@@ -55,5 +56,20 @@ mod tests {
         let mut buffer = Vec::new();
         packet.encode_body(&mut buffer).unwrap();
         assert_eq!(Disconnect::decode(&mut &buffer[..]).unwrap(), packet);
+    }
+
+    #[test]
+    fn disconnect_handles_large_login_kick_reason() {
+        let large_reason = format!(
+            r#"{{"text":"Whitelist: You are not whitelisted on this server! {}"}}"#,
+            "Details ".repeat(100)
+        );
+        let packet = Disconnect {
+            reason: large_reason,
+        };
+        let mut buffer = Vec::new();
+        packet.encode_body(&mut buffer).unwrap();
+        let decoded = Disconnect::decode(&mut &buffer[..]).unwrap();
+        assert_eq!(decoded, packet);
     }
 }

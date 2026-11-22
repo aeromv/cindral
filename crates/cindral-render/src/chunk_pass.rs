@@ -34,68 +34,11 @@ pub(crate) struct QuadRange {
     pub(crate) len: u32,
 }
 
-/// The facing buckets of a section's quads, in their order in the buffer:
-/// +X, -X, +Y, -Y, +Z, -Z, then the quads whose normal is not an axis
-/// (crossed plants, rotated elements), which are always drawn.
-pub(crate) const FACINGS: usize = 7;
-/// The bucket of the quads that are always drawn.
-const UNALIGNED: usize = 6;
-/// Every bucket visible.
-pub(crate) const ALL_FACINGS: u8 = 0x7F;
-
-/// The bucket of a quad, from the normal of its first vertex.
-fn facing(normal: [f32; 3]) -> usize {
-    match normal {
-        [1.0, 0.0, 0.0] => 0,
-        [-1.0, 0.0, 0.0] => 1,
-        [0.0, 1.0, 0.0] => 2,
-        [0.0, -1.0, 0.0] => 3,
-        [0.0, 0.0, 1.0] => 4,
-        [0.0, 0.0, -1.0] => 5,
-        _ => UNALIGNED,
-    }
-}
-
-/// The facing buckets that can face an eye at `eye` (relative to the corner of
-/// the 16-block section box, the box spanning `0..16` on each axis), as bits.
-///
-/// A quad with normal +X whose plane is at `x` faces the eye only when
-/// `eye.x > x`; every plane of a +X quad of the section is at `x >= 0`, so with
-/// `eye.x <= 0` none of them does and the bucket is skipped. The back faces
-/// would be culled by the pipeline anyway, after their vertices were shaded:
-/// skipping them first saves that work (Sodium's facing culling).
-#[must_use]
-pub(crate) fn visible_facings(eye: [f64; 3]) -> u8 {
-    let mut bits = 1 << UNALIGNED;
-    for (axis, &at) in eye.iter().enumerate() {
-        if at > 0.0 {
-            bits |= 1 << (2 * axis);
-        }
-        if at < 16.0 {
-            bits |= 1 << (2 * axis + 1);
-        }
-    }
-    bits
-}
-
 /// Where one section's quads are in an uploaded pass.
-///
-/// A sorted opaque pass (the mesher's spans and the cutout flags were known)
-/// is laid out group by group (solid, then cutout), then by facing bucket,
-/// then by section: the +X quads of every section of the column are
-/// contiguous, so a bucket that the eye sees in every visible section is one
-/// draw. Its ranges are in `solid_facings` / `cutout_facings`. An unsorted
-/// pass keeps one range per section and group in `solid` / `cutout`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct SectionQuads {
     pub(crate) solid: QuadRange,
     pub(crate) cutout: QuadRange,
-    /// Whether the facing ranges are used instead of `solid` and `cutout`.
-    pub(crate) sorted: bool,
-    /// The solid quads of each facing bucket.
-    pub(crate) solid_facings: [QuadRange; FACINGS],
-    /// The cutout quads of each facing bucket.
-    pub(crate) cutout_facings: [QuadRange; FACINGS],
 }
 
 /// Which quads of a section to draw.
@@ -129,12 +72,22 @@ impl ChunkPass {
     /// `mask` (bit `s` = section `s`) for `group`; sections that touch in the
     /// buffer are merged into one run. A pass without spans is drawn whole
     /// whenever the mask is not empty.
-    pub(crate) fn visible_runs(
-        &self,
-        (mask, facings): (u16, &dyn Fn(usize) -> u8),
-        group: Group,
-        mut draw: impl FnMut(Range<u32>),
-    ) {
+    pub(crate) fn visible_runs(&self, mask: u16, group: Group, mut draw: impl FnMut(Range<u32>)) {
+        match group {
+            Group::Solid if self.solid_quads == 0 => return,
+            Group::Cutout if self.solid_quads == self.quads => return,
+            _ => {}
+        }
+        if mask == 0xFFFF {
+            let range = match group {
+                Group::Solid => self.solid_indices(),
+                Group::Cutout => self.cutout_indices(),
+            };
+            if !range.is_empty() {
+                draw(range);
+            }
+            return;
+        }
         let Some(sections) = &self.sections else {
             if mask != 0 {
                 let range = match group {
@@ -147,7 +100,7 @@ impl ChunkPass {
             }
             return;
         };
-        collect_runs(sections, (mask, facings), group, &mut draw);
+        collect_runs(sections, mask, group, &mut draw);
     }
 
     /// The indices of the SOLID quads.
@@ -164,18 +117,25 @@ impl ChunkPass {
 /// The walk of [`ChunkPass::visible_runs`] over the sections of a pass.
 fn collect_runs(
     sections: &[SectionQuads; SECTIONS],
-    (mask, facings): (u16, &dyn Fn(usize) -> u8),
+    mask: u16,
     group: Group,
     draw: &mut impl FnMut(Range<u32>),
 ) {
     let mut run: Option<QuadRange> = None;
-    let mut add = |quads: QuadRange, visible: bool, run: &mut Option<QuadRange>| {
+    for (index, section) in sections.iter().enumerate() {
+        let quads = match group {
+            Group::Solid => section.solid,
+            Group::Cutout => section.cutout,
+        };
         if quads.len == 0 {
             // Nothing to draw: it neither joins nor breaks a run.
-            return;
+            continue;
         }
-        *run = if visible {
-            match *run {
+        run = if mask >> index & 1 == 0 {
+            flush(run, draw);
+            None
+        } else {
+            match run {
                 Some(open) if open.start + open.len == quads.start => Some(QuadRange {
                     start: open.start,
                     len: open.len + quads.len,
@@ -185,32 +145,7 @@ fn collect_runs(
                     Some(quads)
                 }
             }
-        } else {
-            flush(*run, draw);
-            None
         };
-    };
-    let shown = |index: usize| mask >> index & 1 == 1;
-    if sections.iter().any(|section| section.sorted) {
-        let visible: [u8; SECTIONS] =
-            std::array::from_fn(|index| if shown(index) { facings(index) } else { 0 });
-        for bucket in 0..FACINGS {
-            for (index, section) in sections.iter().enumerate() {
-                let quads = match group {
-                    Group::Solid => section.solid_facings[bucket],
-                    Group::Cutout => section.cutout_facings[bucket],
-                };
-                add(quads, visible[index] >> bucket & 1 == 1, &mut run);
-            }
-        }
-    } else {
-        for (index, section) in sections.iter().enumerate() {
-            let quads = match group {
-                Group::Solid => section.solid,
-                Group::Cutout => section.cutout,
-            };
-            add(quads, shown(index), &mut run);
-        }
     }
     flush(run, draw);
 }
@@ -294,11 +229,9 @@ fn unsplit_sections(spans: &[VertexSpan]) -> Box<[SectionQuads; SECTIONS]> {
     sections
 }
 
-/// Like [`split_solid_cutout`], for a pass with section spans, laid out as
-/// [`SectionQuads`] describes: solid then cutout, each by facing bucket, each
-/// bucket section by section; returns the number of solid quads and where
-/// each section's quads went. Quads keep their relative order inside a bucket
-/// of a section, so overlays still follow the faces they cover.
+/// Like [`split_solid_cutout`], section by section: the solid quads of all
+/// sections come first in section order, then the cutout ones; returns the
+/// number of solid quads and where each section's quads went.
 pub(crate) fn split_sections(
     vertices: &[Vertex],
     spans: &[VertexSpan],
@@ -311,35 +244,30 @@ pub(crate) fn split_sections(
             .chunks_exact(VERTICES_PER_QUAD)
     };
     let mut sections = Box::new([SectionQuads::default(); SECTIONS]);
-    for section in sections.iter_mut() {
-        section.sorted = true;
-    }
     out.clear();
     out.reserve(vertices.len());
-    let mut solid_total = 0;
-    for wants_cutout in [false, true] {
-        for bucket in 0..FACINGS {
-            for (section, span) in sections.iter_mut().zip(spans) {
-                let start = (out.len() / VERTICES_PER_QUAD) as u32;
-                for quad in quads_of(span).filter(|quad| {
-                    is_cutout(quad) == wants_cutout && facing(quad[0].normal) == bucket
-                }) {
-                    out.extend_from_slice(quad);
-                }
-                let range = QuadRange {
-                    start,
-                    len: (out.len() / VERTICES_PER_QUAD) as u32 - start,
-                };
-                if wants_cutout {
-                    section.cutout_facings[bucket] = range;
-                } else {
-                    section.solid_facings[bucket] = range;
-                }
-            }
+    for (section, span) in sections.iter_mut().zip(spans) {
+        let start = (out.len() / VERTICES_PER_QUAD) as u32;
+        for quad in quads_of(span).filter(|quad| !is_cutout(quad)) {
+            out.extend_from_slice(quad);
         }
-        if !wants_cutout {
-            solid_total = (out.len() / VERTICES_PER_QUAD) as u32;
+        let end = (out.len() / VERTICES_PER_QUAD) as u32;
+        section.solid = QuadRange {
+            start,
+            len: end - start,
+        };
+    }
+    let solid_total = (out.len() / VERTICES_PER_QUAD) as u32;
+    for (section, span) in sections.iter_mut().zip(spans) {
+        let start = (out.len() / VERTICES_PER_QUAD) as u32;
+        for quad in quads_of(span).filter(|quad| is_cutout(quad)) {
+            out.extend_from_slice(quad);
         }
+        let end = (out.len() / VERTICES_PER_QUAD) as u32;
+        section.cutout = QuadRange {
+            start,
+            len: end - start,
+        };
     }
     (solid_total, sections)
 }
@@ -429,6 +357,11 @@ impl QuadIndices {
     pub(crate) fn bind(&self, pass: &mut wgpu::RenderPass<'_>) {
         pass.set_index_buffer(self.buffer.slice(..), wgpu::IndexFormat::Uint32);
     }
+
+    /// Size of the shared quad index buffer in bytes.
+    pub(crate) fn byte_size(&self) -> u64 {
+        self.buffer.size()
+    }
 }
 
 #[cfg(test)]
@@ -514,97 +447,15 @@ mod tests {
         assert_eq!(solid, 3);
         let xs: Vec<f32> = out.chunks(4).map(|q| q[0].position[0]).collect();
         assert_eq!(xs, [0.0, 3.0, 4.0, 1.0, 2.0]);
-        // Every test quad faces +Y (bucket 2).
-        let up = 2;
-        assert_eq!(
-            sections[0].solid_facings[up],
-            QuadRange { start: 0, len: 1 }
-        );
-        assert_eq!(
-            sections[2].solid_facings[up],
-            QuadRange { start: 1, len: 2 }
-        );
-        assert_eq!(
-            sections[0].cutout_facings[up],
-            QuadRange { start: 3, len: 1 }
-        );
-        assert_eq!(
-            sections[1].cutout_facings[up],
-            QuadRange { start: 4, len: 1 }
-        );
-        assert!(sections.iter().all(|section| section.sorted));
-    }
-
-    fn facing_quad(normal: [f32; 3], x: f32) -> [Vertex; 4] {
-        quad(0, x).map(|vertex| Vertex { normal, ..vertex })
-    }
-
-    #[test]
-    fn a_bucket_is_contiguous_over_the_column_and_hidden_facings_are_skipped() {
-        // Section 0: +X, -X. Section 1: +X, +Y.
-        let input: Vec<Vertex> = [
-            facing_quad([1.0, 0.0, 0.0], 0.0),
-            facing_quad([-1.0, 0.0, 0.0], 1.0),
-            facing_quad([1.0, 0.0, 0.0], 2.0),
-            facing_quad([0.0, 1.0, 0.0], 3.0),
-        ]
-        .concat();
-        let mut out = Vec::new();
-        let (_, sections) = split_sections(&input, &spans_of([2, 2, 0]), &[false], &mut out);
-        let xs: Vec<f32> = out.chunks(4).map(|q| q[0].position[0]).collect();
-        assert_eq!(
-            xs,
-            [0.0, 2.0, 1.0, 3.0],
-            "+X of both sections, then -X, then +Y"
-        );
-        let runs = |facings: &dyn Fn(usize) -> u8| {
-            let mut runs = Vec::new();
-            collect_runs(&sections, (0xFFFF, facings), Group::Solid, &mut |run| {
-                runs.push(run)
-            });
-            runs
-        };
-        assert_eq!(
-            runs(&|_| ALL_FACINGS),
-            vec![0_u32..24],
-            "all visible: one draw"
-        );
-        // An eye west of the column sees no +X face.
-        let west = |_| visible_facings([-5.0, 8.0, 8.0]);
-        assert_eq!(runs(&west), vec![12_u32..24]);
-    }
-
-    #[test]
-    fn the_eye_sees_the_facings_on_its_side_of_the_section() {
-        let bits = |eye| visible_facings(eye);
-        // Inside the box every facing can be seen.
-        assert_eq!(bits([8.0, 8.0, 8.0]), ALL_FACINGS);
-        // Above and to the east: no -Y (bottom) and no -X faces face it.
-        let above_east = bits([20.0, 30.0, 8.0]);
-        assert_eq!(above_east & (1 << 1), 0, "-X");
-        assert_eq!(above_east & (1 << 3), 0, "-Y");
-        assert_ne!(above_east & (1 << 0), 0, "+X");
-        assert_ne!(above_east & (1 << 2), 0, "+Y");
-        // On a face plane the faces in that plane are edge-on: skipped.
-        assert_eq!(bits([0.0, 8.0, 8.0]) & 1, 0);
-        assert_ne!(bits([0.0, 8.0, 8.0]) & (1 << 6), 0, "unaligned: always");
-    }
-
-    #[test]
-    fn the_buckets_follow_the_normal_axis() {
-        assert_eq!(facing([1.0, 0.0, 0.0]), 0);
-        assert_eq!(facing([0.0, 0.0, -1.0]), 5);
-        assert_eq!(facing([0.707, 0.0, 0.707]), UNALIGNED);
+        assert_eq!(sections[0].solid, QuadRange { start: 0, len: 1 });
+        assert_eq!(sections[2].solid, QuadRange { start: 1, len: 2 });
+        assert_eq!(sections[0].cutout, QuadRange { start: 3, len: 1 });
+        assert_eq!(sections[1].cutout, QuadRange { start: 4, len: 1 });
     }
 
     fn all_runs(sections: &[SectionQuads; SECTIONS], mask: u16) -> Vec<Range<u32>> {
         let mut runs = Vec::new();
-        collect_runs(
-            sections,
-            (mask, &|_| ALL_FACINGS),
-            Group::Solid,
-            &mut |run| runs.push(run),
-        );
+        collect_runs(sections, mask, Group::Solid, &mut |run| runs.push(run));
         runs
     }
 

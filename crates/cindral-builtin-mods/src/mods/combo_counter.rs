@@ -101,8 +101,8 @@ mod tests {
             now_ms,
             combat: CombatInfo {
                 hits,
-                last_reach_cm: None,
                 hurts,
+                ..CombatInfo::default()
             },
             ..ModContext::default()
         };
