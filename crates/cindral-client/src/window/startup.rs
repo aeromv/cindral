@@ -255,6 +255,7 @@ impl App {
             discord: crate::discord::Presence::spawn(),
             lang,
             mods: ModsRuntime::new(&options.mods),
+            mods_memory: (0, None),
             options,
             audio,
             window: None,

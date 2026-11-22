@@ -120,6 +120,18 @@ impl App {
             let selected = hud.map_or(0, |hud| hud.selected_slot);
             crate::mods::facts::equipment(slots, selected)
         });
+        let items = slots.map_or(Default::default(), |slots| {
+            crate::mods::facts::item_counts(slots)
+        });
+        // The memory is read twice a second, not every frame.
+        let since = now.duration_since(self.clock.started).as_millis();
+        if self.mods_memory.0 == 0 || since.saturating_sub(self.mods_memory.0) >= 500 {
+            let used = crate::debug::process_memory::read().used;
+            self.mods_memory = (
+                since.max(1),
+                u32::try_from(used >> 20).ok().filter(|mb| *mb > 0),
+            );
+        }
         self.mods.update(&FrameInput {
             now_ms: u64::try_from(now.duration_since(self.clock.started).as_millis())
                 .unwrap_or(u64::MAX),
@@ -149,6 +161,9 @@ impl App {
             effects: hud.map_or([None; MAX_EFFECTS], |hud| {
                 crate::mods::facts::effects(&hud.active_effects)
             }),
+            local_time: Some(crate::mods::facts::local_time()),
+            memory_mb: self.mods_memory.1,
+            items,
         });
     }
 

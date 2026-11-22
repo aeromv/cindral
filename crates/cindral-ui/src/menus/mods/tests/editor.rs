@@ -153,7 +153,16 @@ fn the_editor_leaves_the_whole_screen_to_the_widgets() {
     let mut view = editor_view();
     view.hud.widgets[0] = widget("fps", [180.0, 100.0]);
     let mut on_the_list = on_list();
-    assert_eq!(drag(&mut on_the_list, &view, [180.0, 100.0]), None);
+    // On the list, the press belongs to the panel (a card here), never to
+    // the widget under it.
+    let listed = drag(&mut on_the_list, &view, [180.0, 100.0]);
+    assert!(
+        !matches!(
+            listed,
+            Some(ModsOutcome::Hud(HudEditorOutcome::Placed { .. }))
+        ),
+        "{listed:?}"
+    );
     let rect = placed_rect(drag(&mut in_editor(), &view, [180.0, 100.0]));
     assert_eq!((rect.x, rect.y), (190.0, 100.0 + 20.0 / SCALE));
 }

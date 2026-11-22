@@ -1,43 +1,32 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! One mod as a card: an icon tile and the on/off switch on top, its name and
-//! a two-line description, then its category tag and the gear that opens its
-//! settings. A mod that is on is tinted with the accent and its tile is lit;
-//! the pointer lifts the card.
+//! One mod as a tile: its icon large in the middle, its name under it, a
+//! small gear in the corner for its settings, and a state bar across the
+//! bottom that turns it on and off. The description lives on the settings
+//! page; the grid only has to be scanned. A mod that is on lights its icon
+//! and its bar with the accent; the pointer lifts the tile.
 
 use crate::context::Ui;
 use crate::geom::Rect;
 use crate::icons::Icon;
-use crate::menus::common::wrap_lines;
-use crate::modern::theme::{self, mix, with_opacity, BRAND_PIXEL_SIZE};
-use crate::modern::{
-    draw_icon, draw_text, fit_text, measure_text, toggle, Align, TOGGLE_HEIGHT, TOGGLE_WIDTH,
-};
+use crate::modern::theme::{self, mix, with_opacity};
+use crate::modern::{draw_icon, draw_text, fit_text, Align};
 
 use super::button::icon_button;
 use super::motion::Motion;
-use super::style::{
-    bordered, card_colors, hover_level, Paint, DESC_SIZE, LABEL_SIZE, MOD_NAME_SIZE, SURFACE_2,
-    TOGGLE_SCALE,
-};
+use super::style::{bordered, card_colors, hover_level, Paint, MOD_NAME_SIZE, SURFACE_2};
 use super::view::ModCardView;
 
 /// Space between the card edge and its content, in GUI units.
-const PAD: f32 = 8.0;
-/// Edge of the icon tile of a card.
-const TILE: f32 = 20.0;
+const PAD: f32 = 6.0;
+/// Size of the icon in the middle of a card.
+const ICON: f32 = 18.0;
 /// Edge of the gear button.
-const GEAR: f32 = 16.0;
-/// Height of the category tag and its space to the text.
-const TAG_HEIGHT: f32 = 11.0;
-const TAG_PAD: f32 = 4.0;
-/// Space between the tile and the name, and between the name and the text.
-const TILE_GAP: f32 = 6.0;
-const NAME_GAP: f32 = 2.0;
-/// How far the description lines are apart, as a share of their size.
-const LINE_HEIGHT: f32 = 1.45;
-/// The lines of a description.
-const DESC_LINES: usize = 2;
+const GEAR: f32 = 12.0;
+/// Height of the state bar along the bottom.
+const BAR: f32 = 14.0;
+/// Size of the text of the state bar.
+const BAR_TEXT: f32 = 5.5;
 
 /// What the player did on a card.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,27 +56,31 @@ pub(super) fn mod_icon(id: &str) -> Icon {
         "legacy_animations" => Icon::Sword,
         "direction_hud" => Icon::Compass,
         "capes" => Icon::Cape,
+        "reach_display" => Icon::Target,
+        "speed" => Icon::Run,
+        "item_counter" => Icon::Flask,
+        "clock" => Icon::Compass,
+        "memory" => Icon::Sliders,
         _ => Icon::Grid,
     }
 }
 
-/// The switch and the settings button of a card at `rect`, in physical pixels:
-/// the switch at the top right, level with the tile, the gear at the bottom
-/// right.
+/// The state bar and the settings button of a card at `rect`, in physical
+/// pixels: the bar across the bottom, the gear in the top right corner.
 pub(super) fn controls(rect: Rect, scale: f32) -> (Rect, Rect) {
-    let switch = Rect::new(
-        rect.right() - (PAD + TOGGLE_WIDTH * TOGGLE_SCALE) * scale,
-        rect.y + (PAD + (TILE - TOGGLE_HEIGHT * TOGGLE_SCALE) * 0.5) * scale,
-        TOGGLE_WIDTH * TOGGLE_SCALE * scale,
-        TOGGLE_HEIGHT * TOGGLE_SCALE * scale,
+    let bar = Rect::new(
+        rect.x + PAD * scale,
+        rect.bottom() - (PAD + BAR) * scale,
+        rect.width - 2.0 * PAD * scale,
+        BAR * scale,
     );
     let gear = Rect::new(
         rect.right() - (PAD + GEAR) * scale,
-        rect.bottom() - (PAD + GEAR) * scale,
+        rect.y + PAD * scale,
         GEAR * scale,
         GEAR * scale,
     );
-    (switch, gear)
+    (bar, gear)
 }
 
 /// Draws the square tile of a mod in `rect`: filled with the accent and the
@@ -109,91 +102,96 @@ pub(super) fn icon_tile(ui: &mut Ui, paint: Paint<'_>, rect: Rect, (id, on): (&s
 }
 
 /// Draws `card` in `rect` and reports what was clicked. `tag` is the name of
-/// the category of the mod.
+/// the category of the mod, shown on the settings page only.
 pub(super) fn card(
     ui: &mut Ui,
     paint: Paint<'_>,
     rect: Rect,
     (card, motion): (&ModCardView, &mut Motion),
-    tag: &str,
+    _tag: &str,
 ) -> Option<CardAction> {
     let scale = paint.scale;
     let hover = motion.hover(&format!("hover/{}", card.id), ui.is_hovered(rect));
-    let (on, speed) = motion.level(&format!("on/{}", card.id), card.enabled);
-    let (switch, gear) = controls(rect, scale);
-    let left = rect.x + PAD * scale;
-    let inner_width = rect.width - 2.0 * PAD * scale;
+    let (on, _speed) = motion.level(&format!("on/{}", card.id), card.enabled);
+    let (bar, gear) = controls(rect, scale);
+    let centre_x = rect.x + rect.width * 0.5;
 
-    bordered(ui, rect, 7.0 * scale, card_colors(hover, on));
-    let tile = Rect::new(left, rect.y + PAD * scale, TILE * scale, TILE * scale);
-    icon_tile(ui, paint, tile, (&card.id, on));
+    bordered(ui, rect, 4.0 * scale, card_colors(hover, on));
 
-    let name_y = tile.bottom() + (TILE_GAP + MOD_NAME_SIZE * 0.5) * scale;
-    let name = fit_text(paint.brand, &card.name, MOD_NAME_SIZE * scale, inner_width);
+    // The icon and the name, centred in the space above the bar.
+    let room_top = rect.y + PAD * scale;
+    let room = bar.y - room_top;
+    let name_size = MOD_NAME_SIZE * scale;
+    let block = ICON * scale + 5.0 * scale + name_size;
+    let icon_y = room_top + (room - block) * 0.5 + ICON * scale * 0.5;
+    let icon_colour = mix(with_opacity(theme::TEXT, 0.55), theme::ACCENT, on);
+    draw_icon(
+        ui,
+        paint.brand,
+        mod_icon(&card.id),
+        (centre_x, icon_y),
+        (ICON * scale, icon_colour),
+    );
+    let name_y = icon_y + ICON * scale * 0.5 + 5.0 * scale + name_size * 0.5;
+    let name = fit_text(
+        paint.brand,
+        &card.name,
+        name_size,
+        rect.width - 2.0 * PAD * scale,
+    );
     paint.text(
         ui,
         &name,
-        (left, name_y),
-        (MOD_NAME_SIZE, theme::TEXT, Align::Left),
+        (centre_x, name_y),
+        (MOD_NAME_SIZE, theme::TEXT, Align::Center),
     );
-    let desc_top = name_y + (MOD_NAME_SIZE * 0.5 + NAME_GAP) * scale;
-    draw_description(ui, paint, &card.description, (left, desc_top, inner_width));
-
-    let tag_y = rect.bottom() - (PAD + GEAR * 0.5) * scale;
-    draw_tag(ui, paint, tag, (left, tag_y, gear.x - left - 4.0 * scale));
 
     ui.push_id(&card.id);
     let settings_id = ui.id("settings");
-    let switch_id = ui.id("switch");
+    let bar_id = ui.id("switch");
     let gear_fade = hover_level(ui, gear);
-    ui.draw().rounded_rect(gear, 4.5 * scale, SURFACE_2);
     let settings = icon_button(
         ui,
         paint.brand,
         (settings_id, gear),
         (Icon::Gear, scale, gear_fade),
     );
-    let look = (hover_level(ui, switch), on, speed);
-    let flipped = toggle(ui, switch_id, switch, card.enabled, look);
+    let flipped = state_bar(ui, paint, (bar_id, bar), (card.enabled, on));
     ui.pop_id();
     flipped
         .map(CardAction::Toggle)
         .or(settings.clicked.then_some(CardAction::OpenSettings))
 }
 
-/// Draws up to [`DESC_LINES`] lines of `text` from `(x, top)`, `width` wide,
-/// the last one cut with an ellipsis when the text is longer.
-fn draw_description(ui: &mut Ui, paint: Paint<'_>, text: &str, (x, top, width): (f32, f32, f32)) {
-    let size = DESC_SIZE * paint.scale;
-    let mut lines = wrap_lines(paint.brand, text, width, size / BRAND_PIXEL_SIZE);
-    if lines.len() > DESC_LINES {
-        let rest = lines.split_off(DESC_LINES - 1).join(" ");
-        lines.push(fit_text(paint.brand, &rest, size, width));
-    }
-    let step = size * LINE_HEIGHT;
-    for (index, line) in lines.iter().enumerate() {
-        let y = top + (index as f32 + 0.5) * step;
-        let style = (DESC_SIZE, theme::TEXT_MUTED, Align::Left);
-        paint.text(ui, line, (x, y), style);
-    }
-}
-
-/// Draws the category tag, a small pill, with its left edge at `x` and its
-/// middle at `y`, in at most `room` pixels.
-fn draw_tag(ui: &mut Ui, paint: Paint<'_>, text: &str, (x, y, room): (f32, f32, f32)) {
-    let scale = paint.scale;
-    let size = LABEL_SIZE * scale;
-    let label = fit_text(paint.brand, text, size, room - 2.0 * TAG_PAD * scale);
-    let width = measure_text(paint.brand, &label, size) + 2.0 * TAG_PAD * scale;
-    let height = TAG_HEIGHT * scale;
-    let pill = Rect::new(x, y - height * 0.5, width, height);
-    ui.draw().rounded_rect(pill, 3.0 * scale, SURFACE_2);
-    let colour = with_opacity(theme::TEXT, 0.7);
+/// The bar that shows and flips the state of a mod: the accent with
+/// "ENABLED" while it is on (`on` is the eased level), a dark bar with
+/// "DISABLED" while it is off. Returns the state asked for on a click.
+fn state_bar(
+    ui: &mut Ui,
+    paint: Paint<'_>,
+    (id, rect): (crate::id::WidgetId, Rect),
+    (enabled, on): (bool, f32),
+) -> Option<bool> {
+    let response = ui.response(id, rect);
+    let hover = if response.hovered { 1.0 } else { 0.0 };
+    let off = mix(SURFACE_2, [1.0, 1.0, 1.0, 0.10], hover);
+    let lit = mix(theme::ACCENT, theme::ACCENT_BRIGHT, hover);
+    ui.draw()
+        .rounded_rect(rect, 3.0 * paint.scale, mix(off, lit, on));
+    let label = if enabled { "ENABLED" } else { "DISABLED" };
+    let colour = mix(with_opacity(theme::TEXT, 0.6), [1.0, 1.0, 1.0, 1.0], on);
+    let size = BAR_TEXT * paint.scale;
+    let centre = (rect.x + rect.width * 0.5, rect.y + rect.height * 0.5);
     draw_text(
         ui,
         paint.brand,
-        &label,
-        (x + TAG_PAD * scale, y),
-        (size, colour, Align::Left),
+        label,
+        centre,
+        (size, colour, Align::Center),
     );
+    if response.clicked {
+        ui.note_button_press();
+        return Some(!enabled);
+    }
+    None
 }

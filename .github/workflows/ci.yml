@@ -43,8 +43,8 @@ jobs:
           # are listed here together with their license. Every entry is
           # reviewed on every pull request.
           allowed=(
-            # "crates/cindral-render/assets/fallback.png CC0-1.0, Umicraft contributors"
-            "crates/cindral-audio/tests/fixtures/tone_440hz_mono.ogg CC0-1.0, Umicraft contributors"
+            # "crates/cindral-render/assets/fallback.png CC0-1.0, Cindral contributors"
+            "crates/cindral-audio/tests/fixtures/tone_440hz_mono.ogg CC0-1.0, Cindral contributors"
             "crates/cindral-assets/client-pack/cindral/textures/ui/logo.png MIT OR Apache-2.0, Cindral contributors (gen_art.py)"
             "crates/cindral-assets/client-pack/cindral/textures/ui/panorama/panorama_0.png MIT OR Apache-2.0, Cindral contributors (gen_art.py)"
             "crates/cindral-assets/client-pack/cindral/textures/ui/panorama/panorama_1.png MIT OR Apache-2.0, Cindral contributors (gen_art.py)"
@@ -56,7 +56,7 @@ jobs:
             "crates/cindral-assets/client-pack/cindral/font/hd/16.png MIT OR Apache-2.0, Cindral project owner"
             "crates/cindral-assets/client-pack/cindral/font/hd/24.png MIT OR Apache-2.0, Cindral project owner"
             "crates/cindral-assets/client-pack/cindral/font/hd/32.png MIT OR Apache-2.0, Cindral project owner"
-            "crates/cindral-assets/client-pack/cindral/textures/ui/settings.png MIT OR Apache-2.0, Umicraft contributors"
+            "crates/cindral-assets/client-pack/cindral/textures/ui/settings.png MIT OR Apache-2.0, Cindral contributors"
           )
 
           is_allowed() {

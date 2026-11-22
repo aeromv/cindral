@@ -77,6 +77,12 @@ pub struct FrameInput {
     pub held: Option<ArmorPiece>,
     /// The active potion effects.
     pub effects: [Option<EffectInfo>; MAX_EFFECTS],
+    /// The time of the computer: hour, minute, second.
+    pub local_time: Option<[u8; 3]>,
+    /// The memory the client uses, in megabytes.
+    pub memory_mb: Option<u32>,
+    /// The PvP items left in the inventory.
+    pub items: cindral_builtin_mods::ItemCounts,
 }
 
 /// The registry of the built-in mods and the per-frame data it needs.
@@ -340,6 +346,9 @@ impl ModsRuntime {
             armor: frame.armor,
             held: frame.held,
             effects: frame.effects,
+            local_time: frame.local_time,
+            memory_mb: frame.memory_mb,
+            items: frame.items,
         }
     }
 }

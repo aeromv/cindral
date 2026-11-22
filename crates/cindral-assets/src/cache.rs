@@ -85,7 +85,7 @@ impl AssetCache {
     /// ```
     pub fn in_data_dir() -> AssetsResult<Self> {
         let base = platform_data_dir().ok_or(AssetsError::NoDataDir)?;
-        Ok(Self::new(app_dir_in(&base).join("assets")))
+        Ok(Self::new(base.join(APP_DIR).join("assets")))
     }
 
     /// The root directory of the cache.
@@ -261,8 +261,6 @@ impl ObjectStore for AssetCache {
 
 /// The folder of the client in the platform data directory.
 const APP_DIR: &str = "cindral";
-/// The folder of the client before it was named Cindral.
-const LEGACY_APP_DIR: &str = "umicraft";
 
 /// The `cindral` folder of the platform data directory: where the options
 /// file lives next to the asset cache (`%APPDATA%\cindral` on Windows).
@@ -270,26 +268,7 @@ const LEGACY_APP_DIR: &str = "umicraft";
 /// `None` when the platform data directory cannot be determined.
 #[must_use]
 pub fn data_dir() -> Option<PathBuf> {
-    platform_data_dir().map(|base| app_dir_in(&base))
-}
-
-/// The client folder in `base`. A folder of the old name with no new one is
-/// moved over once, so the options, the accounts and the downloaded assets
-/// (about 110 MB) carry over; if it cannot be moved (a file in use), the old
-/// folder is used as it is rather than starting empty.
-fn app_dir_in(base: &Path) -> PathBuf {
-    let current = base.join(APP_DIR);
-    if current.exists() {
-        return current;
-    }
-    let legacy = base.join(LEGACY_APP_DIR);
-    if !legacy.is_dir() {
-        return current;
-    }
-    match std::fs::rename(&legacy, &current) {
-        Ok(()) => current,
-        Err(_) => legacy,
-    }
+    platform_data_dir().map(|base| base.join(APP_DIR))
 }
 
 /// The platform data directory, without the application folder.
@@ -427,34 +406,6 @@ mod tests {
             .read_object("0000000000000000000000000000000000000000")
             .expect_err("a missing object must fail");
         assert!(matches!(err, AssetsError::Missing { .. }));
-    }
-
-    #[test]
-    fn the_old_folder_moves_to_the_new_name_once() {
-        let base = std::env::temp_dir().join(format!("cindral-dir-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(base.join(LEGACY_APP_DIR)).unwrap();
-        std::fs::write(base.join(LEGACY_APP_DIR).join("options.toml"), "kept").unwrap();
-
-        let dir = app_dir_in(&base);
-        assert_eq!(dir, base.join(APP_DIR));
-        assert_eq!(
-            std::fs::read_to_string(dir.join("options.toml")).unwrap(),
-            "kept"
-        );
-        assert!(!base.join(LEGACY_APP_DIR).exists(), "moved, not copied");
-        // A second call keeps the new folder.
-        assert_eq!(app_dir_in(&base), base.join(APP_DIR));
-        std::fs::remove_dir_all(&base).unwrap();
-    }
-
-    #[test]
-    fn a_new_install_gets_the_new_folder_name() {
-        let base = std::env::temp_dir().join(format!("cindral-new-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
-        assert_eq!(app_dir_in(&base), base.join(APP_DIR));
-        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

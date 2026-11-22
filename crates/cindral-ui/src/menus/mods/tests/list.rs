@@ -35,71 +35,14 @@ fn the_switch_of_a_card_asks_for_the_other_state() {
     );
 }
 
-/// The x of the knob of the first card's switch in one drawn frame.
-fn knob_x(screen: &mut ModsScreen, view: &ModsView) -> f32 {
-    let (switch, _) = controls(first_card(), mods_layout(VIEWPORT).scale);
-    let atlas = FontAtlas::fallback();
-    frame(UiInput::default(), |ui| {
-        screen.show(
-            ui,
-            (&atlas, &atlas),
-            &Lang::builtin(),
-            view,
-            (&no_snap, 0.0),
-        );
-        ui.draw()
-            .commands()
-            .iter()
-            .find_map(|command| match command {
-                DrawCommand::RoundedRect { rect, .. }
-                    if rect.height < switch.height
-                        && rect.x >= switch.x
-                        && rect.right() <= switch.right() + 1e-3
-                        && rect.y >= switch.y
-                        && rect.bottom() <= switch.bottom() + 1e-3 =>
-                {
-                    Some(rect.x)
-                }
-                _ => None,
-            })
-            .expect("the knob is drawn")
-    })
-}
-
 #[test]
-fn the_knob_glides_when_a_mod_is_switched_on() {
-    let (switch, _) = controls(first_card(), mods_layout(VIEWPORT).scale);
-    let (off_x, on_x) = (
-        crate::modern::knob_rect(switch, false).x,
-        crate::modern::knob_rect(switch, true).x,
-    );
-    let mut screen = on_list();
+fn the_state_bar_of_a_card_says_whether_the_mod_is_on() {
+    let names = texts(&mut on_list(), &view());
+    assert!(has_text(&names, "DISABLED"), "{names:?}");
     let mut on = view();
     on.cards[0].enabled = true;
-    assert!((knob_x(&mut screen, &view()) - off_x).abs() < 1e-3);
-    // The mod is switched on: the knob leaves its end, swings past the other
-    // and settles, tick by tick.
-    let mut xs = vec![knob_x(&mut screen, &on)];
-    for _ in 0..30 {
-        screen.tick();
-        xs.push(knob_x(&mut screen, &on));
-    }
-    assert!((xs[0] - off_x).abs() < 1e-3, "it starts at the off end");
-    assert!(
-        xs.iter().any(|&x| x > off_x + 1e-3 && x < on_x - 1e-3),
-        "it is seen between the ends: {xs:?}"
-    );
-    let travel = on_x - off_x;
-    let furthest = xs.iter().copied().fold(f32::MIN, f32::max);
-    assert!(furthest > on_x + travel * 0.03, "it overshoots: {xs:?}");
-    assert!(
-        furthest < on_x + travel * 0.3,
-        "but stays in the margin: {xs:?}"
-    );
-    assert!(
-        (xs.last().copied().unwrap_or_default() - on_x).abs() < 1e-3,
-        "it settles on the on end: {xs:?}"
-    );
+    let names = texts(&mut on_list(), &on);
+    assert!(has_text(&names, "ENABLED"), "{names:?}");
 }
 
 #[test]

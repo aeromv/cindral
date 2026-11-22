@@ -49,7 +49,11 @@ memory-stats = "1.2.0"
 
 [target.'cfg(windows)'.dependencies]
 # timeBeginPeriod: a 1 ms timer for the game thread's tick (timer_resolution.rs).
-windows-sys = { version = "0.61", features = ["Win32_Media"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Media",
+    "Win32_System_SystemInformation",
+] }
 
 [dev-dependencies]
 criterion = "0.8"

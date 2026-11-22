@@ -1,146 +1,163 @@
 <div align="center">
 
-<img src=".github/assets/logo.png" width="96" alt="Cindral logo">
+<img src=".github/assets/logo.png" width="88" alt="Cindral">
 
 # Cindral
 
-**A lightweight Minecraft 1.8.9 client for PvP, written in Rust.**
+A Minecraft 1.8.9 PvP client written from scratch in Rust.
 
-High frame rates on modest hardware, a built-in mod set, and nothing in the way of the game.
-
-[![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-ff7329)](#license)
+[![Release](https://img.shields.io/github/v/release/aeromv/cindral?color=ff7329)](https://github.com/aeromv/cindral/releases)
+[![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-555)](#license)
 ![Minecraft](https://img.shields.io/badge/Minecraft-1.8.9-3c8527)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-555)
 
 <img src=".github/assets/title.png" alt="Cindral title screen" width="820">
 
 </div>
 
-## About
+Cindral is not a mod loader and does not run the Java game. The network code,
+the world, the renderer and the interface are its own, so it starts in about
+a second, needs no Java, and holds high frame rates on hardware that vanilla
+1.8.9 struggles with. It joins any 1.8.8 or 1.8.9 server the way the vanilla
+client does.
 
-Cindral is a standalone client for Minecraft Java Edition 1.8.9 servers. It
-is not a mod loader and does not run on top of the Java game: the networking,
-the world, the renderer and the interface are its own, written in Rust on
-[wgpu](https://wgpu.rs). It connects to any 1.8.8 or 1.8.9 server the way the
-vanilla client does.
+## At a glance
 
-It is made for players who want the game to feel instant. A PC with integrated
-graphics should hold several hundred frames per second in a PvP arena, and the
-client should never stand between your input and the server.
+Measured on a Pentium Gold G5400 with Intel UHD 610 graphics, the kind of PC
+most clients are not tested on, with a 32x PvP pack enabled:
 
-## Features
-
-**Performance**
-- A renderer made for weak GPUs: Direct3D 12 on Windows and Vulkan on Linux,
-  with merged faces, cave culling and two frames in flight.
-- An uncapped frame rate that game logic never stalls: the game runs on its own
-  thread at a steady 20 ticks per second.
-- A `pvp` video preset: render distance 4, a sharp picture and no frame cap.
-
-**Built-in mods**: one menu, nothing to download (see [Mods](#mods)).
-
-**Resource packs and visuals**
-- OptiFine-style pack features: connected textures, custom items, custom
-  skies, custom colours, random and custom entity models, custom GUIs and
-  fonts, and texture animations.
-- Dynamic Lights: a held torch or a burning mob lights the blocks around it.
-- OptiFine-style video settings, Smart Animations and a lagometer.
-- Server resource packs.
-
-**Interface**
-- Three themes: Ember (the Cindral look, the default), Amethyst, and Vanilla,
-  which follows the buttons and backgrounds of your resource pack.
-- A drag-and-drop HUD editor: move and resize every widget on screen.
-- Discord Rich Presence.
-
-**Accounts**
-- Microsoft accounts with an account switcher, offline mode, and sessions
-  passed in by a launcher.
-
-## Screenshots
-
-| | |
+| | Cindral 0.2 |
 |---|---|
-| <img src=".github/assets/mods.png" alt="Mods menu"> | <img src=".github/assets/servers.png" alt="Server list"> |
-| Mods menu and HUD | Server list |
-| <img src=".github/assets/video.png" alt="Video settings"> | <img src=".github/assets/options.png" alt="Options"> |
-| Video settings | Options |
+| Window on screen | 0.4 s |
+| Textures and resource pack ready | 1.0 to 1.5 s |
+| Frame rate on a PvP server, `pvp` preset | 200 to 450 fps |
+| Game ticks | 20 per second, missed ticks caught up as in 1.8 |
 
-## Getting started
+## What you get
 
-Cindral needs the official Minecraft 1.8.8 game files. It downloads them from
-Mojang the first time (about 110 MB, checked against Mojang's SHA-1 hashes);
-no game files are shipped with Cindral.
+**A fair client.** Every mod shows information or changes how the game looks.
+Nothing clicks, aims, reaches or moves for you, and nothing ever will.
 
-1. Build it (see [Building](#building)).
-2. Download the game files once:
+**21 built-in mods**, in one menu (Right Shift), each with its own settings.
+See the [list](#mods).
+
+**A HUD you arrange yourself.** Drag any widget, resize it, pin it to a
+corner or an edge, snap it to the grid, lock it in place. Each widget has its
+own colours, background, opacity, corner radius, padding and text shadow.
+Undo and redo work across the editor, and three layouts are built in
+(Default, PvP, Minimal) next to your own.
+
+**Resource packs as you know them.** PvP packs, server packs, and the
+OptiFine and MCPatcher features they rely on: connected textures, custom
+items, custom skies, custom colours, random and custom mob models, custom
+GUIs and fonts, and texture animations.
+
+**Settings that matter for PvP.** Video presets, OptiFine-style quality and
+performance pages, Dynamic Lights, Smart Animations, a lagometer, per-type
+particle switches, and three interface themes (Ember, Amethyst, and Vanilla,
+which follows your pack's buttons).
+
+**Accounts.** Microsoft accounts with a switcher, offline mode, and sessions
+passed in by a launcher. Discord Rich Presence shows where you are playing.
+
+<table>
+  <tr>
+    <td><img src=".github/assets/mods.png" alt="Mods menu"></td>
+    <td><img src=".github/assets/hud-editor.png" alt="HUD editor"></td>
+  </tr>
+  <tr>
+    <td align="center">Mods menu</td>
+    <td align="center">HUD editor</td>
+  </tr>
+  <tr>
+    <td><img src=".github/assets/servers.png" alt="Server list"></td>
+    <td><img src=".github/assets/video.png" alt="Video settings"></td>
+  </tr>
+  <tr>
+    <td align="center">Server list</td>
+    <td align="center">Video settings</td>
+  </tr>
+</table>
+
+## Install
+
+1. Download `cindral.exe` from the
+   [latest release](https://github.com/aeromv/cindral/releases/latest), or
+   [build it](#building).
+2. Get the Minecraft 1.8.8 game files once. Cindral downloads them from
+   Mojang and checks them against Mojang's SHA-1 hashes (about 110 MB); no
+   game files are shipped with it:
    ```sh
    cindral --setup-assets
    ```
-3. Start it:
+3. Run `cindral`. Add your server under **Play**, or join directly:
    ```sh
-   cindral
+   cindral play.example.net 25565
    ```
-   The client opens on the title screen. Add a server under **Play**, or connect
-   straight away with `cindral play.example.net 25565`.
 
-To start with the PvP video preset (render distance 4, no frame cap), run
-`cindral --preset pvp`. The other presets are `low`, `medium` and `high`.
+On Windows, keep `dxcompiler.dll` next to `cindral.exe` when the release
+includes it: shaders then compile with the DirectX Shader Compiler and the
+first frame comes about a second sooner.
 
-### Resource packs
+### Useful options
 
-Put a `.zip` or a pack folder in the `resourcepacks` folder of Cindral
-(`%APPDATA%\cindral\resourcepacks` on Windows) and turn it on under
-**Options → Resource Packs**.
+| Option | What it does |
+|---|---|
+| `--preset pvp` | Render distance 4, no frame cap, light effects. Also `low`, `medium`, `high`. |
+| `--resource-pack PATH` | Load a pack for this run, on top of the ones you enabled. |
+| `--username`, `--uuid`, `--accessToken` | Use a session from a launcher. |
+| `--backend dx12` or `vulkan` | Pick the graphics API. Windows uses Direct3D 12 by default. |
+
+Resource packs go in `%APPDATA%\cindral\resourcepacks` on Windows and are
+turned on under **Options → Resource Packs**.
 
 ## Mods
 
-Open the mods menu in game with **Right Shift**. Every mod can be turned on or
-off and has its own settings; HUD mods can be placed anywhere on screen.
-
-| Mod | What it does |
+| HUD | |
 |---|---|
-| FPS | Frames per second, with an optional frame time |
-| CPS | Clicks per second: left, right or both |
-| Keystrokes | W, A, S, D, the mouse buttons and space, lit while held |
-| Armor Status | Each armor piece and its remaining durability |
-| Potion Effects | Active effects with their level and time left |
-| Coordinates | Position and facing direction |
+| FPS | Frame rate, optionally the frame time |
+| CPS | Clicks per second, left, right or both |
+| Keystrokes | Movement keys, mouse buttons and space bar, lit while held |
 | Ping | Latency to the server |
+| Coordinates | Position and facing |
+| Direction HUD | A compass ruler along the top of the screen |
 | Reach Display | Distance of your last hit |
-| Combo Counter | Hits in a row until you are hit back |
-| Toggle Sprint | Sprint stays on while you move forward |
-| Zoom | Hold **C** to zoom in smoothly |
+| Combo Counter | Hits in a row before you are hit back |
+| Speed | Blocks per second |
+| Item Counter | Splash potions, golden apples, ender pearls and arrows left |
+| Armor Status | Each armor piece and the held item, with durability |
+| Potion Effects | Active effects with their level and time left |
+| Clock | The time of your computer, 12 or 24 hours |
+| Memory | Memory the game uses |
+
+| Gameplay and visuals | |
+|---|---|
+| Toggle Sprint | Sprint stays on, with an optional on-screen indicator |
+| Zoom | Hold C to zoom smoothly |
+| 1.7 Animations | 1.7 sword blocking and held-item positions |
 | Fullbright | Full light in caves and at night |
 | No Hurt Cam | No camera tilt when you take damage |
-| Motion Blur | Blur when turning, in three styles |
-| 1.7 Animations | 1.7 sword blocking and held-item positions |
-| Direction HUD | A compass ruler at the top of the screen |
+| Motion Blur | Three styles of blur when turning |
 | Capes | Capes from OptiFine, MinecraftCapes, LabyMod and Cosmetica |
 
 Reach Display and Combo Counter count only the hits the server confirmed.
-
-The Capes mod is on by default. To show capes it sends the names of the
-players you meet to those cape services; turn it off in the mods menu if you
-prefer.
-
-Cindral has no autoclicker, reach, velocity or any other feature that gives an
-unfair advantage, and it will not get one.
+The Capes mod is on by default; to show capes it sends the names of the
+players you meet to those services, so turn it off if you prefer not to.
 
 ## Controls
 
 | Key | Action |
 |---|---|
 | Right Shift | Mods menu and HUD editor |
-| F3 | Debug screen |
+| F3 | Debug screen; F3 + A, B, D, G, H, T as in 1.8 |
 | F2 | Screenshot |
-| C | Zoom (with the Zoom mod) |
+| F5 | Camera view |
+| C | Zoom |
 
 Every key can be changed under **Options → Controls**.
 
 ## Building
 
-You need a recent stable [Rust toolchain](https://rustup.rs).
+You need a stable [Rust toolchain](https://rustup.rs).
 
 ```sh
 git clone https://github.com/aeromv/cindral.git
@@ -148,22 +165,14 @@ cd cindral
 cargo build --release
 ```
 
-The binary is `target/release/cindral` (`cindral.exe` on Windows). The `dist`
-profile (`cargo build --profile dist`) takes longer to build and runs a little
-faster.
-
-On Windows, put `dxcompiler.dll` next to `cindral.exe` for a faster start. It
-comes with the [DirectX Shader Compiler](https://github.com/microsoft/DirectXShaderCompiler/releases)
-and the Windows SDK (`Redist\D3D\x64`). Without it, Cindral uses the older,
-slower shader compiler that ships with Windows.
-
-On Linux, install the ALSA development headers first (`libasound2-dev` on
+The binary is `target/release/cindral` (`cindral.exe` on Windows). For a
+release build, `cargo build --profile dist` takes longer and runs a few
+percent faster. On Linux, install the ALSA headers first (`libasound2-dev` on
 Debian and Ubuntu).
 
 ## Contributing
 
-Issues and pull requests are welcome. Before opening a pull request, check
-that these pass:
+Bug reports and pull requests are welcome. A pull request should pass:
 
 ```sh
 cargo fmt --all -- --check
@@ -171,18 +180,20 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-The workspace is split by area: `cindral-protocol` (packets), `cindral-net`
-(connection and session), `cindral-world`, `cindral-mesh`, `cindral-render`,
-`cindral-ui`, `cindral-game`, `cindral-builtin-mods`, and `cindral-client`,
-which builds the `cindral` binary.
+The code is split into crates by area: `cindral-protocol` and `cindral-net`
+for the network, `cindral-world`, `cindral-mesh` and `cindral-render` for the
+world and its drawing, `cindral-ui` for the interface, `cindral-game` for the
+game rules, `cindral-packext` for the OptiFine pack formats,
+`cindral-builtin-mods` for the mods, and `cindral-client`, which builds the
+`cindral` binary.
+
+What changed in each version is in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-Cindral is licensed under either of [Apache License 2.0](LICENSE-APACHE) or
-[MIT](LICENSE-MIT), at your option.
-
-Cindral is a fork of [Umicraft](https://github.com/MATHIP6/umicraft). The title
-screen uses [Inter](https://rsms.me/inter/) (SIL Open Font License 1.1).
+Licensed under either of [Apache License 2.0](LICENSE-APACHE) or
+[MIT](LICENSE-MIT), at your option. The title screen uses
+[Inter](https://rsms.me/inter/) (SIL Open Font License 1.1).
 
 Cindral is not an official Minecraft product and is not approved by or
 associated with Mojang Studios or Microsoft.

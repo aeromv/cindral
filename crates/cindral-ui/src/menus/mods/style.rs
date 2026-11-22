@@ -15,7 +15,7 @@ use crate::text::FontAtlas;
 pub(super) const BACKDROP: Color = [0.0, 0.0, 0.0, 0.25];
 /// The panel behind everything (`#101014` at 94 %: the design asks for 78 %, but
 /// the game showed through too much).
-pub(super) const PANEL: Color = [0.063, 0.063, 0.078, 0.94];
+pub(super) const PANEL: Color = [0.055, 0.053, 0.058, 0.96];
 /// The one-pixel line around the panel.
 pub(super) const PANEL_RIM: Color = [1.0, 1.0, 1.0, 0.09];
 /// The sidebar, a faint veil over the panel.
@@ -35,17 +35,17 @@ pub(super) const FIELD_BORDER: Color = [1.0, 1.0, 1.0, 0.10];
 /// A sidebar item under the pointer.
 pub(super) const ITEM_HOVER: Color = [1.0, 1.0, 1.0, 0.04];
 /// The active sidebar item: the accent at 22 %.
-pub(super) const ACCENT_SOFT: Color = [0.486, 0.227, 0.929, 0.22];
+pub(super) const ACCENT_SOFT: Color = [1.0, 0.45, 0.16, 0.22];
 /// An enabled card: the accent at 10 % and its border at 55 %.
-pub(super) const ACCENT_TINT: Color = [0.486, 0.227, 0.929, 0.10];
-pub(super) const ACCENT_BORDER: Color = [0.486, 0.227, 0.929, 0.55];
+pub(super) const ACCENT_TINT: Color = [1.0, 0.45, 0.16, 0.06];
+pub(super) const ACCENT_BORDER: Color = [1.0, 0.45, 0.16, 0.45];
 /// The accent of a button under the pointer (`#8B5CF6`).
-pub(super) const ACCENT_HOVER: Color = [0.545, 0.361, 0.965, 1.0];
+pub(super) const ACCENT_HOVER: Color = [1.0, 0.58, 0.30, 1.0];
 /// Width of the rim of the Mods button, in GUI units.
 pub(super) const RIM_WIDTH: f32 = 0.5;
 /// The rim of the Mods button at rest and under the pointer (the accent).
 pub(super) const RIM: Color = [1.0, 1.0, 1.0, 0.14];
-pub(super) const RIM_HOVER: Color = [0.486, 0.227, 0.929, 0.70];
+pub(super) const RIM_HOVER: Color = [1.0, 0.45, 0.16, 0.70];
 /// How much larger than the shared switch the switches of this menu are: the
 /// design's is 40 x 24 px, 20 x 12 units.
 pub(super) const TOGGLE_SCALE: f32 = 1.5;

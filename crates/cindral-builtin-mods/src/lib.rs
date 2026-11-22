@@ -29,7 +29,9 @@ pub mod settings;
 pub mod traits;
 
 pub use config::{ModConfig, ModsConfig, SavedWidget};
-pub use context::{ArmorPiece, CombatInfo, EffectInfo, KeyState, ModContext, MAX_EFFECTS};
+pub use context::{
+    ArmorPiece, CombatInfo, EffectInfo, ItemCounts, KeyState, ModContext, MAX_EFFECTS,
+};
 pub use history::History;
 pub use hud::{
     Anchor, HudCell, HudContent, HudIcon, HudLabel, HudLine, HudPlacement, HudPreset, HudRect,

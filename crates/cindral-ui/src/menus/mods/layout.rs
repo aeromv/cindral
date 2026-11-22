@@ -56,10 +56,12 @@ pub(super) const ITEM_GAP: f32 = 2.0;
 /// Height of the button that opens the HUD editor.
 const EDIT_HEIGHT: f32 = 22.0;
 /// Height of a mod card.
-pub(super) const CARD_HEIGHT: f32 = 96.0;
+pub(super) const CARD_HEIGHT: f32 = 74.0;
 /// List width, in GUI units, from which the cards go in three columns, and in
 /// two; below, in one.
 const THREE_COLUMNS_FROM: f32 = 280.0;
+/// List width from which the cards go in four columns.
+const FOUR_COLUMNS_FROM: f32 = 360.0;
 const TWO_COLUMNS_FROM: f32 = 180.0;
 
 /// The size the design was drawn for, in pixels, and how far the menu may
@@ -200,7 +202,9 @@ pub(super) fn item_rect(items: Rect, scale: f32, index: usize) -> Rect {
 /// How many columns of cards fit in an area `width_units` wide.
 #[must_use]
 pub(super) fn columns(width_units: f32) -> usize {
-    if width_units >= THREE_COLUMNS_FROM {
+    if width_units >= FOUR_COLUMNS_FROM {
+        4
+    } else if width_units >= THREE_COLUMNS_FROM {
         3
     } else if width_units >= TWO_COLUMNS_FROM {
         2

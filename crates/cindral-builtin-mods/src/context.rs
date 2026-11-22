@@ -95,4 +95,23 @@ pub struct ModContext {
     pub held: Option<ArmorPiece>,
     /// The active potion effects, packed at the front.
     pub effects: [Option<EffectInfo>; MAX_EFFECTS],
+    /// The time of the computer: hour (0 to 23), minute and second.
+    pub local_time: Option<[u8; 3]>,
+    /// The memory the client uses, in megabytes, when the platform says.
+    pub memory_mb: Option<u32>,
+    /// The PvP items left in the inventory.
+    pub items: ItemCounts,
+}
+
+/// How many of the items a PvP fight is decided on are in the inventory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ItemCounts {
+    /// Splash potions of any kind.
+    pub splash_potions: u32,
+    /// Golden apples, normal and enchanted.
+    pub golden_apples: u32,
+    /// Ender pearls.
+    pub ender_pearls: u32,
+    /// Arrows.
+    pub arrows: u32,
 }

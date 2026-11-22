@@ -6,7 +6,7 @@
 //!
 //! [`ModContext`]: cindral_builtin_mods::ModContext
 
-use cindral_builtin_mods::{ArmorPiece, EffectInfo, MAX_EFFECTS};
+use cindral_builtin_mods::{ArmorPiece, EffectInfo, ItemCounts, MAX_EFFECTS};
 use cindral_game::inventory::HOTBAR_START;
 use cindral_game::items;
 use cindral_game::server::effects::ActiveEffect;
@@ -41,6 +41,62 @@ pub fn equipment(
     let armor = std::array::from_fn(|index| worn(ARMOR_SLOTS.start + index));
     let held = worn(HOTBAR_START + usize::from(selected.min(8)));
     (armor, held)
+}
+
+/// Item ids of the 1.8 registry the item counter looks for.
+const POTION: i16 = 373;
+const GOLDEN_APPLE: i16 = 322;
+const ENDER_PEARL: i16 = 368;
+const ARROW: i16 = 262;
+/// The damage bit of a splash potion (`ItemPotion.isSplash`).
+const SPLASH_BIT: i16 = 0x4000;
+
+/// The PvP items in the 45 slots of the player window.
+#[must_use]
+pub fn item_counts(slots: &[Option<ItemStack>]) -> ItemCounts {
+    let mut counts = ItemCounts::default();
+    for stack in slots.iter().flatten() {
+        let count = u32::from(stack.stack_size.max(0).unsigned_abs());
+        match stack.item_id {
+            POTION if stack.damage & SPLASH_BIT != 0 => counts.splash_potions += count,
+            GOLDEN_APPLE => counts.golden_apples += count,
+            ENDER_PEARL => counts.ender_pearls += count,
+            ARROW => counts.arrows += count,
+            _ => {}
+        }
+    }
+    counts
+}
+
+/// The time of the computer as hour, minute and second; UTC where the local
+/// time zone is not known (only Windows asks the system).
+#[must_use]
+#[allow(unsafe_code)]
+pub fn local_time() -> [u8; 3] {
+    #[cfg(windows)]
+    {
+        let mut time = windows_sys::Win32::Foundation::SYSTEMTIME {
+            wYear: 0,
+            wMonth: 0,
+            wDayOfWeek: 0,
+            wDay: 0,
+            wHour: 0,
+            wMinute: 0,
+            wSecond: 0,
+            wMilliseconds: 0,
+        };
+        // SAFETY: `GetLocalTime` only writes the structure it is given.
+        unsafe { windows_sys::Win32::System::SystemInformation::GetLocalTime(&mut time) };
+        [time.wHour, time.wMinute, time.wSecond].map(|part| u8::try_from(part).unwrap_or(0))
+    }
+    #[cfg(not(windows))]
+    {
+        let seconds = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs());
+        let of_day = seconds % 86_400;
+        [of_day / 3600, of_day / 60 % 60, of_day % 60].map(|part| part as u8)
+    }
 }
 
 /// The active effects as the mods read them, in id order; effects past

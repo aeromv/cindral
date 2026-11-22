@@ -217,5 +217,8 @@ struct App {
     clock: FrameClock,
     /// The built-in mods (ADR-0065).
     mods: ModsRuntime,
+    /// When the memory shown by the Memory mod was read (milliseconds since
+    /// the start, `0` for never) and what it was, in megabytes.
+    mods_memory: (u128, Option<u32>),
     exit_error: Option<String>,
 }

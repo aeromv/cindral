@@ -164,12 +164,16 @@ fn every_hud_mod_is_listed_on_or_off_with_its_lock() {
             ("keystrokes", false, false),
             ("combo_counter", false, false),
             ("reach_display", false, false),
+            ("speed", false, false),
+            ("item_counter", false, false),
+            ("clock", false, false),
+            ("memory", false, false),
             ("armor_status", false, false),
             ("potion_effects", false, false),
             ("direction_hud", false, false),
             ("toggle_sprint", false, false),
         ],
-        "the eleven mods that have a widget (Toggle Sprint's indicator too), and no other"
+        "every mod that has a widget (Toggle Sprint's indicator too), and no other"
     );
     assert!(view.is_locked("cps") && !view.is_locked("fps"));
     assert!(!view.has_custom);
