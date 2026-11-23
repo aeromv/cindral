@@ -85,10 +85,19 @@ pub(super) fn run(
         // answered faster than the frame rate. The window reports the frame
         // duration; events wait for the next slot, and a slot takes every queued
         // event (up to the pass limit), like the scheduled-task queue.
-        let period = Duration::from_micros(u64::from(frame_micros.load(Ordering::Relaxed)));
+        //
+        // Never longer than a tick, and always before a tick: the ticks run
+        // on their own clock here, not in the frame loop as in vanilla, so a
+        // slow frame (a stutter of 200 ms) held the knockback and the
+        // teleports of the server while four ticks went out from the old
+        // state. Servers read that as ignored knockback and pulled the
+        // player back.
+        let period =
+            Duration::from_micros(u64::from(frame_micros.load(Ordering::Relaxed))).min(TICK);
         let pacing = !period.is_zero();
         let mut events_processed = 0;
-        if !pacing || Instant::now() >= next_drain {
+        let now = Instant::now();
+        if !pacing || now >= next_drain || now >= next_tick {
             while events_processed < MAX_EVENTS_PER_PASS {
                 let Some(event) = deferred.pop_front().or_else(|| events.try_recv().ok()) else {
                     break;

@@ -17,6 +17,7 @@ mod cps;
 mod direction_hud;
 mod fps;
 mod fullbright;
+mod hit_color;
 mod item_counter;
 mod keystrokes;
 mod legacy_animations;
@@ -55,6 +56,7 @@ pub fn all() -> Vec<Box<dyn BuiltinMod>> {
         Box::new(direction_hud::DirectionHud),
         Box::new(motion_blur::MotionBlur),
         Box::new(fullbright::Fullbright),
+        Box::new(hit_color::HitColor),
         Box::new(zoom::Zoom),
         Box::new(no_hurt_cam::NoHurtCam),
         Box::new(legacy_animations::LegacyAnimations),

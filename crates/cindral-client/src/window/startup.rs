@@ -261,6 +261,7 @@ impl App {
             discord: crate::discord::Presence::spawn(),
             first_run,
             window_shown: false,
+            stutters: crate::debug::stutter::StutterLog::new(std::time::Instant::now()),
             lang,
             mods: ModsRuntime::new(&options.mods),
             mods_memory: (0, None),

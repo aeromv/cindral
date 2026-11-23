@@ -396,7 +396,7 @@ impl Game {
     /// The latency in the local player's own tab list entry, which is how the
     /// server reports it (MCP `NetworkPlayerInfo.getResponseTime`). A negative
     /// value is not a measure.
-    pub(super) fn local_ping_ms(&self) -> Option<u32> {
+    pub(in crate::game) fn local_ping_ms(&self) -> Option<u32> {
         let entry = self.social.player_list.by_name(&self.own_name)?;
         u32::try_from(entry.ping).ok()
     }

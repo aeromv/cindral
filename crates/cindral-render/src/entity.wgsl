@@ -27,6 +27,9 @@ struct Camera {
     lightmap: array<vec4<f32>, 256>,
     // The dynamic lights of the frame, the first `light_count` of them.
     lights: array<DynamicLight, 16>,
+    // The colour a hurt entity is blended towards (rgb) and how far (a); the
+    // Hit Color mod sets it, vanilla is (1, 0, 0, 0.3).
+    hurt_color: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> camera: Camera;
@@ -196,9 +199,10 @@ fn fog_at(world_position: vec3<f32>, inv_w: f32) -> f32 {
 
 // The colour of a lit texel: hurt tint, flash, light, shade and fog.
 fn lit_colour(in: VertexOut, tex: vec4<f32>) -> vec3<f32> {
-    // A hurt or dying entity is blended 30 % towards red before the light is
-    // applied (MCP `RendererLivingEntity.setBrightness`: (1, 0, 0, 0.3)).
-    var base = mix(tex.rgb * in.dye, vec3<f32>(1.0, 0.0, 0.0), 0.3 * in.hurt);
+    // A hurt or dying entity is blended towards red before the light is
+    // applied (MCP `RendererLivingEntity.setBrightness`: (1, 0, 0, 0.3); the
+    // Hit Color mod picks its own colour and strength).
+    var base = mix(tex.rgb * in.dye, camera.hurt_color.rgb, camera.hurt_color.a * in.hurt);
     // The creeper about to explode flashes white, at most 20 %
     // (MCP `RenderCreeper.getColorMultiplier`).
     base = mix(base, vec3<f32>(1.0), 0.2 * in.flash);

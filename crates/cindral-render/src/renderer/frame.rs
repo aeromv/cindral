@@ -115,6 +115,7 @@ impl Renderer {
             fog_planar: f32::from(u8::from(sky.fog.planar)),
             origin: origin.as_vec3().to_array(),
             light_count,
+            hurt_color: self.hurt_color,
             lightmap: if self.fullbright {
                 lightmap::unlit()
             } else {

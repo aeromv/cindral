@@ -7,18 +7,20 @@ use winit::keyboard::KeyCode;
 
 use super::keyboard::*;
 use super::redraw::*;
-use super::*;
 use crate::options::{self};
 
 #[test]
-fn a_window_without_the_focus_is_capped_low_and_one_with_it_is_not() {
+fn the_frame_rate_stays_the_same_when_the_window_loses_the_focus() {
     assert_eq!(
         frame_cap(options::UNLIMITED_FPS, true),
         options::UNLIMITED_FPS
     );
     assert_eq!(frame_cap(144, true), 144);
-    assert_eq!(frame_cap(options::UNLIMITED_FPS, false), BACKGROUND_FPS);
-    assert_eq!(frame_cap(20, false), 20, "an option already lower stays");
+    assert_eq!(
+        frame_cap(options::UNLIMITED_FPS, false),
+        options::UNLIMITED_FPS
+    );
+    assert_eq!(frame_cap(20, false), 20);
 }
 
 #[test]

@@ -10,4 +10,5 @@ pub(crate) mod lagometer;
 pub(crate) mod lines;
 pub mod metrics;
 pub(crate) mod process_memory;
+pub(crate) mod stutter;
 pub(crate) mod world;

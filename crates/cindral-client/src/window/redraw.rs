@@ -16,7 +16,6 @@ use winit::event_loop::ActiveEventLoop;
 use super::mods_menu;
 use super::session_control::lifecycle_step;
 use super::App;
-use super::BACKGROUND_FPS;
 use crate::audio_bridge::listener::listener_of;
 use crate::audio_bridge::music::MusicWorld;
 use crate::debug::cpu_split::Stage;
@@ -38,14 +37,12 @@ use crate::screens::Screen;
 use crate::world_view::WorldView;
 use cindral_game::inventory::enchant_book::BookTick;
 
-/// The frame-rate cap in force: the option, and at most [`BACKGROUND_FPS`] without
-/// the focus.
-pub(super) fn frame_cap(max_fps: u32, focused: bool) -> u32 {
-    if focused {
-        max_fps
-    } else {
-        max_fps.min(BACKGROUND_FPS)
-    }
+/// The frame-rate cap in force: the option, focused or not. Switching to
+/// another window keeps the game running at the same rate, so coming back
+/// never starts on a slow, stuttering frame and a second screen keeps a
+/// smooth picture; a minimized window draws nothing anyway.
+pub(super) fn frame_cap(max_fps: u32, _focused: bool) -> u32 {
+    max_fps
 }
 
 /// The stack in the selected hotbar slot of the local player.
@@ -231,6 +228,11 @@ impl App {
         let elapsed = self.clock.tick(now, self.show_overlay);
         if let Some(world) = self.world.as_mut() {
             world.note_frame(Duration::from_secs_f32(elapsed));
+        }
+        if self.session.is_some() {
+            if let Some(line) = self.stutters.record(Duration::from_secs_f32(elapsed), now) {
+                tracing::info!("{line}");
+            }
         }
         // Phase E.9: the game thread takes network events once per frame.
         if let Some(session) = self.session.as_ref() {
@@ -470,6 +472,7 @@ impl App {
         // The Motion Blur mod: the settings cost nothing while they are the same.
         renderer.set_motion_blur(self.mods.motion_blur());
         renderer.set_fullbright(self.mods.fullbright());
+        renderer.set_hurt_color(self.mods.hit_color());
         // The body of the player is part of the picture in the third person.
         renderer.set_motion_blur_body(
             self.world

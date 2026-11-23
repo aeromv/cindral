@@ -35,9 +35,10 @@ fn camera_uniform_is_pod_and_aligned() {
         light_count: 0,
         lightmap: lightmap::unlit(),
         lights: [GpuLight::NONE; MAX_DYNAMIC_LIGHTS],
+        hurt_color: [1.0, 0.0, 0.0, 0.3],
     };
     let bytes = bytemuck::bytes_of(&uniform);
-    assert_eq!(bytes.len(), 128 + 256 * 16 + 16 * 32);
+    assert_eq!(bytes.len(), 128 + 256 * 16 + 16 * 32 + 16);
     assert_eq!(bytes.len() % 16, 0);
     // These offsets must match the WGSL `Camera` struct in terrain.wgsl.
     assert_eq!(std::mem::offset_of!(CameraUniform, camera_pos), 64);
@@ -244,4 +245,14 @@ fn the_shaders_read_the_dynamic_lights_where_the_uniform_puts_them() {
         );
         assert_eq!(lights as usize, std::mem::offset_of!(CameraUniform, lights));
     }
+}
+
+/// The entity shader reads the hurt colour where the uniform writes it.
+#[test]
+fn the_entity_shader_reads_the_hurt_colour_where_the_uniform_puts_it() {
+    let offset = camera_member_offset(crate::entity_pass::ENTITY_WGSL, "hurt_color");
+    assert_eq!(
+        offset as usize,
+        std::mem::offset_of!(CameraUniform, hurt_color)
+    );
 }

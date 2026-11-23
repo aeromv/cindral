@@ -114,6 +114,8 @@ pub fn open_folder(folder: &Path) {
 #[derive(Debug, Default)]
 pub struct VideoApplier {
     fullscreen: bool,
+    /// The Display resolution the fullscreen window was last set with.
+    display: String,
     /// The options of the previous frame, once there was one.
     applied: Option<VideoOptions>,
 }
@@ -124,15 +126,18 @@ impl VideoApplier {
     pub fn new(fullscreen: bool) -> Self {
         Self {
             fullscreen,
+            display: String::new(),
             applied: None,
         }
     }
 
     /// The fullscreen state to switch to, or `None` when `wanted` is what is
     /// already set.
-    fn fullscreen_change(&mut self, wanted: bool) -> Option<bool> {
-        (self.fullscreen != wanted).then(|| {
+    fn fullscreen_change(&mut self, wanted: bool, display: &str) -> Option<bool> {
+        let display_changed = wanted && self.display != display;
+        (self.fullscreen != wanted || display_changed).then(|| {
             self.fullscreen = wanted;
+            self.display = display.to_owned();
             wanted
         })
     }
@@ -175,17 +180,49 @@ impl VideoApplier {
             entities.set_shadows_enabled(video.entity_shadows);
             entities.set_custom_models_enabled(video.quality.custom_entity_models);
         }
-        if let (Some(window), Some(fullscreen)) = (window, self.fullscreen_change(video.fullscreen))
-        {
-            // Borderless on the current monitor: no video mode switch, so
-            // the change is instant and safe on every platform.
-            window.set_fullscreen(fullscreen.then_some(Fullscreen::Borderless(None)));
+        if let (Some(window), Some(fullscreen)) = (
+            window,
+            self.fullscreen_change(video.fullscreen, &video.display),
+        ) {
+            window.set_fullscreen(fullscreen.then(|| fullscreen_mode(window, &video.display)));
         }
         renderer.set_mipmap_levels(u32::from(video.mipmap_levels));
         let fast_leaves = video.details.trees.resolve(video.fancy_graphics) == LeavesMode::Fast;
         renderer.set_opaque_layers(if fast_leaves { leaf_layers } else { &[] });
         crate::meshing::settings::store(video);
         self.change(video)
+    }
+}
+
+/// The fullscreen of `display`: the monitor switched to that resolution
+/// (its highest refresh rate) when it offers it, else borderless at the
+/// desktop resolution, which needs no mode switch.
+fn fullscreen_mode(window: &Window, display: &str) -> Fullscreen {
+    let Some((width, height)) = super::video::display_size(display) else {
+        return Fullscreen::Borderless(None);
+    };
+    let mode = window.current_monitor().and_then(|monitor| {
+        monitor
+            .video_modes()
+            .filter(|mode| {
+                let size = mode.size();
+                (size.width, size.height) == (width, height)
+            })
+            .max_by_key(|mode| (mode.bit_depth(), mode.refresh_rate_millihertz()))
+    });
+    match mode {
+        Some(mode) => {
+            tracing::info!(width, height, "fullscreen at the Display resolution");
+            Fullscreen::Exclusive(mode)
+        }
+        None => {
+            tracing::warn!(
+                width,
+                height,
+                "the monitor has no such mode; borderless instead"
+            );
+            Fullscreen::Borderless(None)
+        }
     }
 }
 
@@ -295,9 +332,27 @@ mod tests {
     #[test]
     fn fullscreen_is_only_switched_when_it_changes() {
         let mut applier = VideoApplier::default();
-        assert_eq!(applier.fullscreen_change(false), None);
-        assert_eq!(applier.fullscreen_change(true), Some(true));
-        assert_eq!(applier.fullscreen_change(true), None);
-        assert_eq!(applier.fullscreen_change(false), Some(false));
+        assert_eq!(applier.fullscreen_change(false, ""), None);
+        assert_eq!(applier.fullscreen_change(true, ""), Some(true));
+        assert_eq!(applier.fullscreen_change(true, ""), None);
+        assert_eq!(applier.fullscreen_change(false, ""), Some(false));
+    }
+
+    #[test]
+    fn a_new_display_resolution_switches_only_in_fullscreen() {
+        let mut applier = VideoApplier::default();
+        assert_eq!(
+            applier.fullscreen_change(false, "1600x900"),
+            None,
+            "a window ignores the Display option"
+        );
+        assert_eq!(applier.fullscreen_change(true, "1600x900"), Some(true));
+        assert_eq!(applier.fullscreen_change(true, "1600x900"), None);
+        assert_eq!(applier.fullscreen_change(true, "1280x720"), Some(true));
+        assert_eq!(
+            super::super::video::display_size("1280x720"),
+            Some((1280, 720))
+        );
+        assert_eq!(super::super::video::display_size(""), None);
     }
 }

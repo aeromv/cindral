@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.5.0 — 23 November 2026
+
+### Fewer setbacks
+- Server packets are never held longer than one tick, and always reach the
+  game before its next tick. Before, a slow frame (a stutter) held the
+  knockback and teleports of the server for its whole length while the
+  game kept sending movement from the old state; many servers answered by
+  pulling the player back.
+
+### Display
+- New **Display** option (Video Settings → Other): the screen resolution in
+  fullscreen, from Desktop down to 800x600. A lower one switches the monitor
+  to it and stretches the picture: softer, but far fewer pixels to draw.
+  The window ignores it.
+- Switching to another window keeps the frame rate. It used to drop to 30
+  FPS, so coming back started on slow, stuttering frames.
+
+### Hit Color
+- New Hit Color mod, on by default: players and mobs you hit turn a deeper
+  red than vanilla's pale tint. Colour and strength can be changed; turning
+  the mod off brings back the vanilla tint.
+
+### Logs
+- `%APPDATA%\cindral\logs\latest.log` records each run (the previous one is
+  kept as `previous.log`): every setback with how far the server pulled you
+  and your ping, and once a minute the average FPS, the slowest frame and
+  the number of stutters. Send it along with a bug report.
+
 ## 0.4.0 — 23 November 2026
 
 ### Performance

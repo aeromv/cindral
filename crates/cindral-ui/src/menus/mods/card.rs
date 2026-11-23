@@ -47,6 +47,7 @@ pub(super) fn mod_icon(id: &str) -> Icon {
         "toggle_sprint" => Icon::Run,
         "motion_blur" => Icon::Blur,
         "fullbright" => Icon::Lightbulb,
+        "hit_color" => Icon::Sword,
         "zoom" => Icon::Binoculars,
         "no_hurt_cam" => Icon::Camera,
         "keystrokes" => Icon::Keyboard,

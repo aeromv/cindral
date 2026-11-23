@@ -144,6 +144,10 @@ pub(crate) struct CameraUniform {
     lightmap: [[f32; 4]; lightmap::ENTRIES],
     /// The dynamic lights of the frame, relative to `origin`.
     lights: [GpuLight; MAX_DYNAMIC_LIGHTS],
+    /// The colour a hurt entity is blended towards (rgb) and how far (a);
+    /// vanilla is `(1, 0, 0, 0.3)`. Last, so the shaders that do not read it
+    /// declare a shorter struct.
+    hurt_color: [f32; 4],
 }
 
 impl CameraUniform {
@@ -170,9 +174,13 @@ impl CameraUniform {
             // GUI items are drawn without the lightmap.
             lightmap: lightmap::unlit(),
             lights: [GpuLight::NONE; MAX_DYNAMIC_LIGHTS],
+            hurt_color: VANILLA_HURT_COLOR,
         }
     }
 }
+
+/// `RendererLivingEntity.setBrightness`: 30 % towards pure red.
+pub(crate) const VANILLA_HURT_COLOR: [f32; 4] = [1.0, 0.0, 0.0, 0.3];
 
 /// GPU vertex and index buffers for one pass of a chunk mesh.
 pub(crate) struct GpuMeshPass {
@@ -400,6 +408,8 @@ pub struct Renderer {
     background_blur: bool,
     /// Every light level is full: the Fullbright mod.
     fullbright: bool,
+    /// The hurt tint of the entities (`CameraUniform::hurt_color`).
+    hurt_color: [f32; 4],
     entity_batches: BatchBuffer,
     /// The glowing layers of the entities, drawn after them.
     additive_batches: BatchBuffer,

@@ -120,12 +120,24 @@ pub(in crate::game) fn apply_placement(
             game.yaw = state.player().yaw;
             game.pitch = state.player().pitch;
             game.status_data.resyncs += 1;
-            tracing::debug!(
-                ?predicted,
-                authoritative = ?position,
-                delta = ?(predicted - position),
-                "the server corrected the position",
-            );
+            // A pull of more than a few centimetres is a setback the player
+            // feels; it goes to the log file so a session can be studied.
+            let pulled = predicted.distance(position);
+            if pulled > 0.05 && pulled < 32.0 {
+                tracing::info!(
+                    blocks = format_args!("{pulled:.2}"),
+                    from = ?predicted,
+                    to = ?position,
+                    ping_ms = ?game.local_ping_ms(),
+                    "setback: the server moved the player back",
+                );
+            } else {
+                tracing::debug!(
+                    ?predicted,
+                    authoritative = ?position,
+                    "the server placed the player",
+                );
+            }
         }
     }
 

@@ -257,6 +257,21 @@ impl ModsRuntime {
         })
     }
 
+    /// The Hit Color mod's tint for hurt entities, `(0xRRGGBB, strength)`,
+    /// while it is on; `None` keeps the vanilla tint.
+    #[must_use]
+    pub fn hit_color(&self) -> Option<(u32, f32)> {
+        let view = self
+            .registry
+            .mods()
+            .find(|view| view.meta.id.as_str() == "hit_color" && view.enabled)?;
+        let hex = view.settings.text("color");
+        let rgb = hex
+            .strip_prefix('#')
+            .and_then(|digits| u32::from_str_radix(digits, 16).ok())?;
+        Some((rgb, view.settings.number("strength")))
+    }
+
     /// Whether the Fullbright mod is on: the world is lit at full strength.
     #[must_use]
     pub fn fullbright(&self) -> bool {

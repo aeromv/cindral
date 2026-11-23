@@ -14,7 +14,9 @@ use std::process::ExitCode;
 use cindral_client::args::{Args, Mode, USAGE};
 use cindral_client::demos::{bench_scene, block_demo, entity_demo, hud_demo, ui_demo};
 use cindral_client::{audio_bridge, headless, launch_session, screenshot, setup_cli, window};
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Layer};
 
 #[global_allocator]
 static ALLOCATOR: cindral_core::profiling::CountingAllocator =
@@ -22,11 +24,7 @@ static ALLOCATOR: cindral_core::profiling::CountingAllocator =
 
 fn main() -> ExitCode {
     attach_parent_console();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
-        )
-        .init();
+    init_logging();
 
     // Kept alive for the whole run: dropping it stops the puffin stream.
     let _profiler = cindral_core::profiling::serve();
@@ -96,3 +94,32 @@ fn attach_parent_console() {
 
 #[cfg(not(windows))]
 fn attach_parent_console() {}
+
+/// The log goes to the terminal (warnings, or `RUST_LOG`) and to
+/// `logs/latest.log` in the data folder (information too: setbacks, the
+/// frame summary, what was loaded), the previous run kept as
+/// `previous.log`. A release build has no console, so the file is what a
+/// player can send when something goes wrong.
+fn init_logging() {
+    let terminal = tracing_subscriber::fmt::layer()
+        .with_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")));
+    let file = cindral_assets::cache::data_dir().and_then(|dir| {
+        let folder = dir.join("logs");
+        std::fs::create_dir_all(&folder).ok()?;
+        let latest = folder.join("latest.log");
+        let _ = std::fs::rename(&latest, folder.join("previous.log"));
+        std::fs::File::create(latest).ok()
+    });
+    let file = file.map(|file| {
+        tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(file))
+            .with_filter(EnvFilter::new(
+                "info,wgpu=warn,wgpu_core=warn,wgpu_hal=warn,naga=warn,rustls=warn,hyper=warn,reqwest=warn",
+            ))
+    });
+    tracing_subscriber::registry()
+        .with(terminal)
+        .with(file)
+        .init();
+}

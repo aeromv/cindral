@@ -79,11 +79,6 @@ const CLI_DEFAULT_VIEW_DISTANCE: u8 = 8;
 /// How long the chat caret stays on, then off, in milliseconds (6 ticks).
 const CARET_BLINK_MS: u128 = 300;
 
-/// The frame rate of a window that has lost the focus (or is minimized): the game
-/// goes on, but it stops competing with the program in front for the GPU, the
-/// CPU and the battery.
-const BACKGROUND_FPS: u32 = 30;
-
 /// Runs the windowed client until the user closes the window.
 ///
 /// # Errors
@@ -159,6 +154,8 @@ struct App {
     audio: AudioBridge,
     /// Whether the window was made visible (after its first frame).
     window_shown: bool,
+    /// The frame times of the minute, summed up in the log.
+    stutters: crate::debug::stutter::StutterLog,
     /// The download of the game files on the first launch, while it runs.
     first_run: Option<crate::first_run::FirstRun>,
     window: Option<Arc<Window>>,

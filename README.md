@@ -25,7 +25,7 @@ client does.
 Measured on a Pentium Gold G5400 with Intel UHD 610 graphics, the kind of PC
 most clients are not tested on, with a 32x PvP pack enabled:
 
-| | Cindral 0.4 |
+| | Cindral 0.5 |
 |---|---|
 | Window on screen (loading screen) | 0.15 s |
 | Textures and resource pack ready | 1.0 to 1.5 s |
@@ -38,7 +38,7 @@ most clients are not tested on, with a 32x PvP pack enabled:
 **A fair client.** Every mod shows information or changes how the game looks.
 Nothing clicks, aims, reaches or moves for you, and nothing ever will.
 
-**21 built-in mods**, in one menu (Right Shift), each with its own settings.
+**22 built-in mods**, in one menu (Right Shift), each with its own settings.
 See the [list](#mods).
 
 **A HUD you arrange yourself.** Drag any widget, resize it, pin it to a
@@ -54,7 +54,8 @@ items, custom skies, custom colours, random and custom mob models, custom
 GUIs and fonts, and texture animations.
 
 **Settings that matter for PvP.** The first start sets the video options
-for your PC by itself. Video presets, OptiFine-style quality and
+for your PC by itself. A Display option lowers the fullscreen resolution and
+stretches the picture for more FPS. Video presets, OptiFine-style quality and
 performance pages, Dynamic Lights, Smart Animations, a lagometer, per-type
 particle switches, and three interface themes (Ember, Amethyst, and Vanilla,
 which follows your pack's buttons).
@@ -144,6 +145,7 @@ turned on under **Options → Resource Packs**.
 | 1.7 Animations | 1.7 sword blocking and held-item positions |
 | Fullbright | Full light in caves and at night |
 | No Hurt Cam | No camera tilt when you take damage |
+| Hit Color | A deeper red on players you hit, colour and strength adjustable |
 | Motion Blur | Three styles of blur when turning |
 | Capes | Capes from OptiFine, MinecraftCapes, LabyMod and Cosmetica |
 

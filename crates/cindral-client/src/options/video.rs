@@ -42,6 +42,31 @@ pub const MIPMAP_LEVELS: std::ops::RangeInclusive<u8> = 0..=4;
 /// (`GameSettings.func_181147_e`).
 pub const MIN_CLOUD_DISTANCE: u8 = 4;
 
+/// The resolutions the Display option offers in fullscreen, largest first;
+/// `""` is the desktop resolution (borderless, no mode switch).
+pub const DISPLAY_MODES: [&str; 13] = [
+    "",
+    "1920x1080",
+    "1680x1050",
+    "1600x900",
+    "1440x900",
+    "1366x768",
+    "1280x1024",
+    "1280x960",
+    "1280x800",
+    "1280x720",
+    "1152x864",
+    "1024x768",
+    "800x600",
+];
+
+/// `display` as `(width, height)`, or `None` for the desktop resolution.
+#[must_use]
+pub fn display_size(display: &str) -> Option<(u32, u32)> {
+    let (width, height) = display.split_once('x')?;
+    Some((width.trim().parse().ok()?, height.trim().parse().ok()?))
+}
+
 /// The render scale range, in percent of the window resolution.
 pub const RENDER_SCALE: std::ops::RangeInclusive<u8> = 25..=100;
 /// The step of the render scale slider, in percent.
@@ -108,6 +133,11 @@ pub struct VideoOptions {
     /// vanilla: OptiFine calls it Render Quality. An integrated GPU spends
     /// most of a frame filling pixels, so this is its biggest FPS lever.
     pub render_scale: u8,
+    /// The screen resolution in fullscreen, as `"1600x900"`; empty keeps the
+    /// desktop resolution. A lower one switches the monitor to it and
+    /// stretches the picture: fewer pixels to fill, more FPS. The window
+    /// itself ignores it.
+    pub display: String,
     /// Light carried by entities (OptiFine's Dynamic Lights): a held torch,
     /// a burning mob. Off is vanilla; Fast updates the light less often than
     /// Fancy.
@@ -223,6 +253,7 @@ impl Default for VideoOptions {
             mesh_threads: 0,
             cave_culling: true,
             render_scale: *RENDER_SCALE.end(),
+            display: String::new(),
             dynamic_lights: OffFastFancy::Off,
             details: DetailOptions::default(),
             quality: QualityOptions::default(),

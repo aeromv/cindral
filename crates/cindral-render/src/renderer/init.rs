@@ -494,6 +494,7 @@ impl Renderer {
             render_scale,
             background_blur: false,
             fullbright: false,
+            hurt_color: super::VANILLA_HURT_COLOR,
             entity_batches: BatchBuffer::default(),
             additive_batches: BatchBuffer::default(),
             glint_batches: BatchBuffer::default(),

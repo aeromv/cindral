@@ -253,6 +253,21 @@ impl Renderer {
         self.fullbright = on;
     }
 
+    /// The colour a hurt entity is blended towards, `0xRRGGBB`, and how far,
+    /// `0.0` to `1.0` (the Hit Color mod); `None` is vanilla, 30 % towards
+    /// pure red. The window calls this every frame.
+    pub fn set_hurt_color(&mut self, color: Option<(u32, f32)>) {
+        self.hurt_color = color.map_or(super::VANILLA_HURT_COLOR, |(rgb, strength)| {
+            let channel = |shift: u32| ((rgb >> shift) & 0xFF) as f32 / 255.0;
+            [
+                channel(16),
+                channel(8),
+                channel(0),
+                strength.clamp(0.0, 1.0),
+            ]
+        });
+    }
+
     /// Tells the motion blur whether the hand in front of the camera moves this
     /// frame (a swing, an item being raised): the hand is blurred, and a still
     /// camera is blurred too while it moves. The window calls this every frame.
