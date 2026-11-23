@@ -139,6 +139,8 @@ options:
   --bench-no-merge    mesh --bench-scene without face merging (to compare)
   --bench-no-facing-cull  draw --bench-scene without facing culling (to compare)
   --bench-fast-render draw --bench-scene with Fast Render on (to compare)
+  --render-scale N    draw the world at N percent of the window (25-100); the
+                      hand and the HUD stay sharp
   --bench-entities N  stand N entities (armoured players, armor stands, zombies,
                       cows) around --bench-scene and mesh them every frame
   --bench-in-flight N frames --bench-scene keeps in flight, 0-3 (default 0: wait
@@ -291,6 +293,8 @@ pub struct Args {
     pub bench_no_facing_cull: bool,
     /// Whether the benchmark scene draws with Fast Render on (to compare).
     pub bench_fast_render: bool,
+    /// `--render-scale`: the world resolution in percent, over the options.
+    pub render_scale: Option<u8>,
     /// Entities the benchmark scene stands around its camera path.
     pub bench_entities: u16,
     /// Frames the benchmark keeps in flight (0: wait after every frame).
@@ -405,6 +409,7 @@ impl Args {
         let mut bench_no_merge = false;
         let mut bench_no_facing_cull = false;
         let mut bench_fast_render = false;
+        let mut render_scale = None;
         let mut bench_entities = 0_u16;
         let mut bench_in_flight = 0_u8;
         let mut bench_stream = false;
@@ -543,6 +548,11 @@ impl Args {
                 "--bench-fast-render" => {
                     bench_fast_render = true;
                     index += 1;
+                }
+                "--render-scale" => {
+                    let percent: u8 = parse_number(words.get(index + 1), "--render-scale")?;
+                    render_scale = Some(percent.clamp(25, 100));
+                    index += 2;
                 }
                 "--bench-entities" => {
                     bench_entities = parse_number(words.get(index + 1), "--bench-entities")?;
@@ -738,6 +748,7 @@ impl Args {
             bench_no_merge,
             bench_no_facing_cull,
             bench_fast_render,
+            render_scale,
             bench_entities,
             bench_in_flight,
             bench_stream,

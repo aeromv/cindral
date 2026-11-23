@@ -435,6 +435,9 @@ struct Measurement {
     frame_ms: Vec<f32>,
     /// The CPU part of each frame: `render` (encode and submit).
     render_ms: Vec<f32>,
+    /// The CPU time of the scene update before `render`: meshing the
+    /// entities, moving the particles.
+    update_ms: Vec<f32>,
     /// The rest of each frame: the wait for the GPU, which other programs
     /// using the GPU lengthen.
     wait_ms: Vec<f32>,
@@ -497,6 +500,7 @@ fn measure(
     let mut measurement = Measurement {
         frame_ms: Vec::with_capacity(frames as usize),
         render_ms: Vec::with_capacity(frames as usize),
+        update_ms: Vec::with_capacity(frames as usize),
         wait_ms: Vec::with_capacity(frames as usize),
         adapter: {
             let adapter = renderer.adapter();
@@ -545,6 +549,7 @@ fn measure(
         }
 
         // Dynamic updates for scenarios with entities and particles
+        let update_start = Instant::now();
         match context.scenario {
             BenchScenario::Entities20
             | BenchScenario::Entities50
@@ -619,6 +624,7 @@ fn measure(
             }
             _ => {}
         }
+        let update_ms = update_start.elapsed().as_secs_f32() * 1000.0;
 
         let start = Instant::now();
         renderer.render(&camera, &overlay)?;
@@ -628,6 +634,7 @@ fn measure(
         if frame >= WARMUP_FRAMES {
             measurement.frame_ms.push(elapsed);
             measurement.render_ms.push(render_ms);
+            measurement.update_ms.push(update_ms);
             measurement.wait_ms.push(elapsed - render_ms);
             if let Some(timings) = renderer.gpu_timings() {
                 for (sum, ms) in measurement.gpu_ms.iter_mut().zip(timings.ms) {
@@ -695,6 +702,7 @@ fn report(
     }
     let _ = writeln!(text, "adapter: {}", measurement.adapter);
     for (name, samples) in [
+        ("update cpu ms", &measurement.update_ms),
         ("render cpu ms", &measurement.render_ms),
         ("gpu wait ms", &measurement.wait_ms),
     ] {
@@ -938,6 +946,7 @@ pub fn run(args: &Args) -> Result<(), ClientError> {
     let mut renderer = Renderer::new_offscreen(args.width, args.height)?;
     let installed = TerrainTextures::load().install(&mut renderer);
     renderer.set_cave_culling(!args.bench_no_cave_culling);
+    renderer.set_render_scale(f32::from(args.render_scale.unwrap_or(100)) / 100.0, true);
     renderer.set_environment(RenderEnvironment::new(0, args.time, 0.0, reach as u8));
 
     let (world, meshes, gen_wall_ms, mesh_wall_ms) = if matches!(

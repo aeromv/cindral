@@ -221,6 +221,22 @@ impl Renderer {
         self.motion_blur.set_settings(&self.device, settings);
     }
 
+    /// Draws the world at `scale` of the window resolution (clamped to
+    /// [`crate::MIN_RENDER_SCALE`]`..=1.0`) and stretches it over the window;
+    /// the hand, the overlays and the HUD stay at the full resolution. On an
+    /// integrated GPU most of a frame is filling pixels, so 0.75 saves
+    /// almost half of it. `smooth` filters the stretch linearly. The same
+    /// values cost nothing.
+    pub fn set_render_scale(&mut self, scale: f32, smooth: bool) {
+        self.render_scale.set(&self.device, scale, smooth);
+    }
+
+    /// The render scale in use (see [`Renderer::set_render_scale`]).
+    #[must_use]
+    pub fn render_scale(&self) -> f32 {
+        self.render_scale.scale()
+    }
+
     /// Tells the motion blur where the eye of the player is while the camera shows
     /// the player from outside (the third person), or `None` in the first person.
     /// The body of the player moves with the camera, not with the world, so a

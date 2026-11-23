@@ -1,7 +1,7 @@
 ﻿; The Windows installer of Cindral (Inno Setup 6).
 ;
 ; Build it after `cargo build --release`:
-;   ISCC.exe /DAppVersion=0.3.0 packaging\windows\cindral.iss
+;   ISCC.exe /DAppVersion=0.4.0 packaging\windows\cindral.iss
 ; The installer lands in target\installer.
 ;
 ; No Mojang file is packed: the last step of the install downloads the
@@ -10,7 +10,7 @@
 ; first launch instead.
 
 #ifndef AppVersion
-  #define AppVersion "0.3.0"
+  #define AppVersion "0.4.0"
 #endif
 #define AppName "Cindral"
 #define AppPublisher "AeroMV"

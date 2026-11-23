@@ -127,6 +127,7 @@ impl Renderer {
             }
         }
         self.depth_view = create_depth(&self.device, width, height);
+        self.render_scale.resize(&self.device, (width, height));
         self.scene_blur
             .resize(&self.device, &self.queue, (width, height));
         self.motion_blur.invalidate();

@@ -42,6 +42,11 @@ pub const MIPMAP_LEVELS: std::ops::RangeInclusive<u8> = 0..=4;
 /// (`GameSettings.func_181147_e`).
 pub const MIN_CLOUD_DISTANCE: u8 = 4;
 
+/// The render scale range, in percent of the window resolution.
+pub const RENDER_SCALE: std::ops::RangeInclusive<u8> = 25..=100;
+/// The step of the render scale slider, in percent.
+pub const RENDER_SCALE_STEP: u8 = 5;
+
 /// The most mesh threads the options accept.
 pub const MAX_MESH_THREADS: u8 = 32;
 
@@ -98,6 +103,11 @@ pub struct VideoOptions {
     /// cave visibility graph of ADR-0062). Off draws every section in the
     /// frustum, which is only useful to compare.
     pub cave_culling: bool,
+    /// The resolution of the world, in percent of the window
+    /// (`Renderer::set_render_scale`); the hand and the HUD stay sharp. Not
+    /// vanilla: OptiFine calls it Render Quality. An integrated GPU spends
+    /// most of a frame filling pixels, so this is its biggest FPS lever.
+    pub render_scale: u8,
     /// Light carried by entities (OptiFine's Dynamic Lights): a held torch,
     /// a burning mob. Off is vanilla; Fast updates the light less often than
     /// Fancy.
@@ -166,6 +176,9 @@ impl VideoOptions {
             .clamp(*RENDER_DISTANCE.start(), *RENDER_DISTANCE.end());
         self.max_fps = self.max_fps.clamp(*MAX_FPS.start(), *MAX_FPS.end());
         self.mesh_threads = self.mesh_threads.min(MAX_MESH_THREADS);
+        self.render_scale = self
+            .render_scale
+            .clamp(*RENDER_SCALE.start(), *RENDER_SCALE.end());
         self.particles = self.particles.min(MAX_PARTICLE_SETTING);
         self.clouds = self.clouds.min(MAX_CLOUD_SETTING);
         self.smooth_lighting = self.smooth_lighting.min(MAX_SMOOTH_LIGHTING);
@@ -209,6 +222,7 @@ impl Default for VideoOptions {
             entity_shadows: true,
             mesh_threads: 0,
             cave_culling: true,
+            render_scale: *RENDER_SCALE.end(),
             dynamic_lights: OffFastFancy::Off,
             details: DetailOptions::default(),
             quality: QualityOptions::default(),
@@ -296,6 +310,11 @@ impl VideoPreset {
         video.entity_shadows = !light;
         video.block_alternatives = !light;
         video.mipmap_levels = if light { 2 } else { high.mipmap_levels };
+        video.render_scale = if self == Self::Low {
+            50
+        } else {
+            high.render_scale
+        };
         if self == Self::Pvp {
             video.vsync = false;
             video.max_fps = UNLIMITED_FPS;

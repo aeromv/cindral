@@ -40,10 +40,19 @@ impl Renderer {
         // With a motion blur, the world goes to the texture too, and the hand and
         // the HUD are drawn over the blurred picture, sharp.
         let motion = self.motion_blur.is_active();
-        let world_view = if blur || motion {
-            self.scene_blur.scene_view()
+        // With a render scale under one (and no blur) the world goes to the
+        // smaller target, stretched over the screen once the world is done.
+        let scaled = if blur || motion {
+            None
         } else {
-            view
+            self.render_scale.world_targets()
+        };
+        let (world_view, world_depth) = if let Some((color, depth)) = scaled {
+            (color, depth)
+        } else if blur || motion {
+            (self.scene_blur.scene_view(), &self.depth_view)
+        } else {
+            (view, &self.depth_view)
         };
         let color_attachment = Some(wgpu::RenderPassColorAttachment {
             view: world_view,
@@ -63,7 +72,7 @@ impl Renderer {
             label: Some("main pass"),
             color_attachments: &[color_attachment],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &self.depth_view,
+                view: world_depth,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
                     store: wgpu::StoreOp::Store,
@@ -79,11 +88,16 @@ impl Renderer {
             sky: 1,
             ..DrawCallStats::default()
         };
-        self.sky.draw(&mut pass);
         self.panorama.draw(&mut pass);
         self.stamp(&mut pass, 1);
 
         draw_stats.opaque += self.draw_opaque_terrain(&mut pass);
+        // The sky lies on the far plane (`sky.wgsl`) and tests the depth with
+        // less-equal: drawn after the opaque terrain, its layers only shade
+        // the pixels no block covers. Drawn first, every layer of the dome,
+        // the sunrise, the stars and a pack's custom sky filled the whole
+        // screen, a quarter of the frame on an integrated GPU.
+        self.sky.draw(&mut pass);
         self.stamp(&mut pass, 2);
 
         draw_stats.entities += self.draw_entity_batches(&mut pass);
@@ -146,6 +160,20 @@ impl Renderer {
         }
         self.stamp(&mut pass, 4);
 
+        if scaled.is_some() {
+            // The world is done at the lower resolution: stretch it over the
+            // screen and draw the hand, the overlays and the HUD sharp on it.
+            drop(pass);
+            pass = composite_pass(
+                encoder,
+                view,
+                &self.depth_view,
+                "render scale pass",
+                wgpu::LoadOp::Clear(1.0),
+            );
+            self.render_scale.upscale(&mut pass);
+        }
+
         if motion {
             // The hand goes into the picture that is blurred: it trails when it
             // moves. The overlays and the HUD come after, sharp.
@@ -196,8 +224,9 @@ impl Renderer {
 
     /// The opaque terrain, nearest chunk first: the SOLID quads (no alpha
     /// test, early depth rejection) and then the CUTOUT ones, which discard
-    /// texels. Both write depth and do not depend on the order. Returns the
-    /// draw calls.
+    /// texels. Both write depth with `LessEqual`, so a CUTOUT quad coplanar
+    /// with a SOLID one (the grass side overlay) is drawn over it. Returns
+    /// the draw calls.
     fn draw_opaque_terrain(&self, pass: &mut wgpu::RenderPass<'_>) -> u32 {
         let mut draws = 0;
         self.quad_indices.bind(pass);

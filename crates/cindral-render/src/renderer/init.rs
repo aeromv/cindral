@@ -338,6 +338,7 @@ impl Renderer {
         };
         let depth_view = create_depth(&device, width, height);
         let scene_blur = SceneBlur::new(&device, &queue, (width, height), format);
+        let render_scale = crate::render_scale::RenderScale::new(&device, format, (width, height));
 
         let icon_atlas = IconAtlas::new(&device, &queue, format);
         let icon_pipeline = create_terrain_pipeline(
@@ -490,6 +491,7 @@ impl Renderer {
             debug_lines,
             scene_blur,
             motion_blur: MotionBlur::new(format),
+            render_scale,
             background_blur: false,
             fullbright: false,
             entity_batches: BatchBuffer::default(),

@@ -25,7 +25,8 @@ use cindral_core::lang::Lang;
 
 use super::video::{
     VideoOptions, MAX_CLOUD_SETTING, MAX_FPS, MAX_GUI_SCALE, MAX_MESH_THREADS,
-    MAX_PARTICLE_SETTING, MAX_SMOOTH_LIGHTING, MIPMAP_LEVELS, RENDER_DISTANCE, UNLIMITED_FPS,
+    MAX_PARTICLE_SETTING, MAX_SMOOTH_LIGHTING, MIPMAP_LEVELS, RENDER_DISTANCE, RENDER_SCALE,
+    RENDER_SCALE_STEP, UNLIMITED_FPS,
 };
 use super::video_sections::{
     fog_start_step, FogChoice, GraphicsChoice, OffFastFancy, RainChoice, TreesChoice,
@@ -751,6 +752,20 @@ pub static VIDEO_SPECS: &[OptionSpec] = &[
         ReloadResources
     ),
     // Performance.
+    OptionSpec {
+        id: "renderScale",
+        label: "cindral.options.renderScale",
+        page: VideoPage::Performance,
+        control: Control::Slider,
+        positions: ((*RENDER_SCALE.end() - *RENDER_SCALE.start()) / RENDER_SCALE_STEP) as u32 + 1,
+        get: |video| u32::from((video.render_scale - RENDER_SCALE.start()) / RENDER_SCALE_STEP),
+        set: |video, position| {
+            video.render_scale = RENDER_SCALE.start() + position as u8 * RENDER_SCALE_STEP;
+        },
+        value: |_, video| format!("{}%", video.render_scale),
+        effect: Effect::Immediate,
+        all: None,
+    },
     toggle!(
         "caveCulling",
         "cindral.options.caveCulling",

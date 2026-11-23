@@ -170,6 +170,7 @@ impl VideoApplier {
         cindral_ui::set_gui_scale_option(u32::from(video.gui_scale));
         renderer.set_vsync(video.vsync);
         renderer.set_cave_culling(video.cave_culling);
+        renderer.set_render_scale(f32::from(video.render_scale) / 100.0, true);
         if let Some(entities) = entities {
             entities.set_shadows_enabled(video.entity_shadows);
             entities.set_custom_models_enabled(video.quality.custom_entity_models);

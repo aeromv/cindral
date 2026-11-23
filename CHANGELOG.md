@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.4.0 — 23 November 2026
+
+### Performance
+- The sky is drawn after the blocks, so its layers (dome, sunrise, stars,
+  a pack's custom sky) only cover the pixels no block hides. On an Intel
+  UHD 610 at 1600x900 a frame needs 25 % less GPU time, and the benchmark
+  scene runs at 166 FPS instead of 123.
+- New **Render Scale** option (Video Settings → Performance): the world is
+  drawn at 25 to 100 % of the window resolution and stretched, while the
+  hand, the HUD and all text stay sharp. The Low preset uses 50 %.
+  `--render-scale N` sets it for one run.
+- The benchmark reports the CPU time of the scene update (entity meshing).
+
+### Inventory and containers
+- Clicking outside an inventory window drops the item, and the pick-block
+  key works in inventories, as in 1.8.
+- Anvil cost and result, villager trades (used-up offers crossed out),
+  the enchanting table's book, clues and costs, beacon tooltips, and the
+  horse in its window.
+- Item tooltips gain books, fireworks, attributes, blocks, and the
+  advanced (F3 + H) lines; the written book gets its glint.
+
+### Rendering
+- The grass side overlay shows again over the dirt side.
+
 ## 0.3.0 — 22 November 2026
 
 ### Install

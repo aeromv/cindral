@@ -395,6 +395,8 @@ pub struct Renderer {
     scene_blur: SceneBlur,
     /// The motion blur of the world (the Motion Blur mod).
     motion_blur: MotionBlur,
+    /// The world at a fraction of the window resolution (Render Scale).
+    render_scale: crate::render_scale::RenderScale,
     background_blur: bool,
     /// Every light level is full: the Fullbright mod.
     fullbright: bool,

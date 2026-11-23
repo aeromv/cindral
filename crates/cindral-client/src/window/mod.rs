@@ -37,6 +37,7 @@ use crate::resources::entity_icons::EntityIcons;
 use crate::scene::item_world::WorldItems;
 use crate::screens::anvil_field::AnvilField;
 use crate::screens::creative::input::CreativeInput;
+use crate::screens::enchant_book::BookClock;
 use crate::screens::inventory::input::InventoryInput;
 use crate::screens::menu_flow::{MenuCommand, MenuFlow};
 use crate::screens::portrait::Spot;
@@ -109,6 +110,9 @@ pub fn run(args: Args) -> Result<(), ClientError> {
     // A preset named on the command line wins over the saved options.
     if let Some(preset) = args.preset {
         preset.apply(&mut options.video);
+    }
+    if let Some(percent) = args.render_scale {
+        options.video.render_scale = percent;
     }
     // A render distance typed on the command line wins over the saved one.
     if args.view_distance != CLI_DEFAULT_VIEW_DISTANCE {
@@ -226,6 +230,8 @@ struct App {
     entity_icons: EntityIcons,
     /// Where the inventory screen put the player model in the last frame.
     portrait: Option<Spot>,
+    /// The book of the enchanting table screen while it is open.
+    screen_book: Option<BookClock>,
     /// The name field of the anvil screen.
     anvil_field: AnvilField,
     /// The open book or sign screen.

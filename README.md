@@ -25,11 +25,12 @@ client does.
 Measured on a Pentium Gold G5400 with Intel UHD 610 graphics, the kind of PC
 most clients are not tested on, with a 32x PvP pack enabled:
 
-| | Cindral 0.3 |
+| | Cindral 0.4 |
 |---|---|
-| Window on screen | 0.4 s |
+| Window on screen (loading screen) | 0.15 s |
 | Textures and resource pack ready | 1.0 to 1.5 s |
-| Frame rate on a PvP server, `pvp` preset | 200 to 450 fps |
+| Benchmark scene, 1600x900, render distance 4 | 166 fps (123 in 0.3) |
+| 20 players in view, 1600x900 | 160 fps |
 | Game ticks | 20 per second, missed ticks caught up as in 1.8 |
 
 ## What you get
@@ -108,6 +109,7 @@ cindral play.example.net 25565
 
 | Option | What it does |
 |---|---|
+| `--render-scale 75` | Draw the world at 75 % of the window resolution; the HUD stays sharp. Most useful on integrated graphics. |
 | `--preset pvp` | Render distance 4, no frame cap, light effects. Also `low`, `medium`, `high`. Without it, the first start picks one for your PC. |
 | `--resource-pack PATH` | Load a pack for this run, on top of the ones you enabled. |
 | `--username`, `--uuid`, `--accessToken` | Use a session from a launcher. |
