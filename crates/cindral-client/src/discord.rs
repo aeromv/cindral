@@ -34,8 +34,8 @@ const LOGO_URL: &str =
 /// The text shown when the pointer rests on the logo.
 const LOGO_TEXT: &str = concat!("Cindral ", env!("CARGO_PKG_VERSION"), " by AeroMV");
 
-/// Where the button of the card leads.
-const DOWNLOAD_URL: &str = "https://github.com/aeromv/cindral/releases/latest";
+/// Where the button of the card leads: the website, which has the download.
+const DOWNLOAD_URL: &str = "https://cindral.aeromv.com";
 
 /// How long the worker waits before it looks for Discord again after a failure.
 const RETRY_EVERY: Duration = Duration::from_secs(15);

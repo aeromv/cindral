@@ -6,6 +6,8 @@
 
 A Minecraft 1.8.9 PvP client written from scratch in Rust.
 
+**[cindral.aeromv.com](https://cindral.aeromv.com)**
+
 [![Release](https://img.shields.io/github/v/release/aeromv/cindral?color=ff7329)](https://github.com/aeromv/cindral/releases)
 [![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-555)](#license)
 ![Minecraft](https://img.shields.io/badge/Minecraft-1.8.9-3c8527)
@@ -83,7 +85,8 @@ and for how long, with a button that leads your friends to Cindral.
 
 ## Install
 
-**Windows.** Download `cindral-setup-<version>.exe` from the
+**Windows.** Download `cindral-setup-<version>.exe` from
+[cindral.aeromv.com](https://cindral.aeromv.com) or the
 [latest release](https://github.com/aeromv/cindral/releases/latest) and run
 it. It needs no administrator rights, adds Start menu and desktop
 shortcuts, and fetches the Minecraft 1.8.8 game files and sounds from Mojang
