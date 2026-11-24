@@ -562,7 +562,20 @@ fn build(
             let fonts = (atlas, None);
             menu_scene(view, (width, height), fonts, (sheets, art), scene).0
         }
-        "video" | "chat-options" | "sounds" | "skin" | "language" | "packs" => {
+        "video" | "chat-options" | "sounds" | "skin" | "language" | "packs" | "display" => {
+            if view == "display" {
+                crate::options::display_modes::set([
+                    (1920, 1080),
+                    (1680, 1050),
+                    (1600, 900),
+                    (1440, 900),
+                    (1366, 768),
+                    (1280, 1024),
+                    (1280, 720),
+                    (1024, 768),
+                    (800, 600),
+                ]);
+            }
             let mut options = Options::default();
             let click = match view {
                 "video" => "nav:video",

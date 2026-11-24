@@ -19,6 +19,7 @@ use cindral_core::{ConfigStore, CoreError};
 
 mod chat;
 mod controls;
+pub mod display_modes;
 mod keys;
 mod language;
 pub mod machine;
@@ -45,7 +46,8 @@ pub use packs::{ResourcePackOptions, PACKS_FOLDER};
 pub use skin::{SkinOptions, SkinPart};
 pub use sound::{CategoryLabel, SoundCategory, SoundOptions};
 pub use video::{
-    VideoOptions, VideoPreset, FOV, MAX_SMOOTH_LIGHTING, RENDER_DISTANCE, UNLIMITED_FPS,
+    display_size, VideoOptions, VideoPreset, FOV, MAX_SMOOTH_LIGHTING, RENDER_DISTANCE,
+    UNLIMITED_FPS,
 };
 
 pub(crate) mod effects;

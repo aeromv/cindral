@@ -116,6 +116,15 @@ pub struct VideoApplier {
     fullscreen: bool,
     /// The Display resolution the fullscreen window was last set with.
     display: String,
+    /// The game is in the background (Alt+Tab): its fullscreen resolution
+    /// gives way to the desktop one when the option asks for it.
+    suspended: bool,
+    /// Where the window was and how big, the last time it was not
+    /// fullscreen: leaving fullscreen puts it back there.
+    windowed: Option<(
+        winit::dpi::PhysicalPosition<i32>,
+        winit::dpi::PhysicalSize<u32>,
+    )>,
     /// The options of the previous frame, once there was one.
     applied: Option<VideoOptions>,
 }
@@ -127,8 +136,56 @@ impl VideoApplier {
         Self {
             fullscreen,
             display: String::new(),
+            suspended: false,
+            windowed: None,
             applied: None,
         }
+    }
+
+    /// Tells the applier whether the game window has the focus. Losing it in
+    /// a fullscreen game at another resolution, with the option on, gives
+    /// the desktop its resolution back at once (before the window goes to
+    /// the taskbar); the next frame with the focus switches back.
+    pub fn set_focused(&mut self, focused: bool, video: &VideoOptions, window: Option<&Window>) {
+        self.suspended = !focused;
+        if focused || !video.alt_tab_desktop || !self.fullscreen || self.display.is_empty() {
+            return;
+        }
+        if let Some(window) = window {
+            window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+            self.display.clear();
+        }
+    }
+
+    fn remember_windowed(&mut self, window: &Window) {
+        if let Ok(position) = window.outer_position() {
+            self.windowed = Some((position, window.inner_size()));
+        }
+    }
+
+    /// Puts a window that left fullscreen back where it was; one that never
+    /// was a window (the game started fullscreen) is centred on its monitor
+    /// at 1280x720, or less on a small screen.
+    fn restore_windowed(&self, window: &Window) {
+        if let Some((position, size)) = self.windowed {
+            let _ = window.request_inner_size(size);
+            window.set_outer_position(position);
+            return;
+        }
+        let Some(monitor) = window.current_monitor() else {
+            return;
+        };
+        let screen = monitor.size();
+        let size = winit::dpi::PhysicalSize::new(
+            1280.min(screen.width * 3 / 4),
+            720.min(screen.height * 3 / 4),
+        );
+        let origin = monitor.position();
+        let _ = window.request_inner_size(size);
+        window.set_outer_position(winit::dpi::PhysicalPosition::new(
+            origin.x + i32::try_from((screen.width - size.width) / 2).unwrap_or(0),
+            origin.y + i32::try_from((screen.height - size.height) / 2).unwrap_or(0),
+        ));
     }
 
     /// The fullscreen state to switch to, or `None` when `wanted` is what is
@@ -180,11 +237,28 @@ impl VideoApplier {
             entities.set_shadows_enabled(video.entity_shadows);
             entities.set_custom_models_enabled(video.quality.custom_entity_models);
         }
-        if let (Some(window), Some(fullscreen)) = (
-            window,
-            self.fullscreen_change(video.fullscreen, &video.display),
-        ) {
-            window.set_fullscreen(fullscreen.then(|| fullscreen_mode(window, &video.display)));
+        let display = if self.suspended && video.alt_tab_desktop {
+            ""
+        } else {
+            video.display.as_str()
+        };
+        if let Some(window) = window {
+            if !self.fullscreen
+                && window.fullscreen().is_none()
+                && !window.is_minimized().unwrap_or(false)
+            {
+                self.remember_windowed(window);
+            }
+            if let Some(fullscreen) = self.fullscreen_change(video.fullscreen, display) {
+                if fullscreen {
+                    window.set_fullscreen(Some(fullscreen_mode(window, display)));
+                } else {
+                    // Leaving fullscreen always gives the desktop its own
+                    // resolution back, then the window its old place.
+                    window.set_fullscreen(None);
+                    self.restore_windowed(window);
+                }
+            }
         }
         renderer.set_mipmap_levels(u32::from(video.mipmap_levels));
         let fast_leaves = video.details.trees.resolve(video.fancy_graphics) == LeavesMode::Fast;
@@ -349,10 +423,7 @@ mod tests {
         assert_eq!(applier.fullscreen_change(true, "1600x900"), Some(true));
         assert_eq!(applier.fullscreen_change(true, "1600x900"), None);
         assert_eq!(applier.fullscreen_change(true, "1280x720"), Some(true));
-        assert_eq!(
-            super::super::video::display_size("1280x720"),
-            Some((1280, 720))
-        );
-        assert_eq!(super::super::video::display_size(""), None);
+        assert_eq!(super::super::display_size("1280x720"), Some((1280, 720)));
+        assert_eq!(super::super::display_size(""), None);
     }
 }

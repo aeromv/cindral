@@ -24,7 +24,7 @@
 use cindral_core::lang::Lang;
 
 use super::video::{
-    VideoOptions, DISPLAY_MODES, MAX_CLOUD_SETTING, MAX_FPS, MAX_GUI_SCALE, MAX_MESH_THREADS,
+    VideoOptions, MAX_CLOUD_SETTING, MAX_FPS, MAX_GUI_SCALE, MAX_MESH_THREADS,
     MAX_PARTICLE_SETTING, MAX_SMOOTH_LIGHTING, MIPMAP_LEVELS, RENDER_DISTANCE, RENDER_SCALE,
     RENDER_SCALE_STEP, UNLIMITED_FPS,
 };
@@ -986,35 +986,6 @@ pub static VIDEO_SPECS: &[OptionSpec] = &[
         fullscreen,
         Immediate
     ),
-    OptionSpec {
-        id: "display",
-        label: "cindral.options.display",
-        page: VideoPage::Other,
-        control: Control::Button,
-        positions: DISPLAY_MODES.len() as u32,
-        get: |video| {
-            DISPLAY_MODES
-                .iter()
-                .position(|mode| *mode == video.display)
-                .unwrap_or(0) as u32
-        },
-        set: |video, position| {
-            video.display = DISPLAY_MODES
-                .get(position as usize)
-                .copied()
-                .unwrap_or_default()
-                .to_owned();
-        },
-        value: |lang, video| {
-            if video.display.is_empty() {
-                lang.tr("cindral.options.display.desktop").to_string()
-            } else {
-                video.display.clone()
-            }
-        },
-        effect: Effect::Immediate,
-        all: None,
-    },
 ];
 
 #[cfg(test)]

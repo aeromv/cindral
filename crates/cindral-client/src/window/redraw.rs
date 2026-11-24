@@ -473,6 +473,7 @@ impl App {
         renderer.set_motion_blur(self.mods.motion_blur());
         renderer.set_fullbright(self.mods.fullbright());
         renderer.set_hurt_color(self.mods.hit_color());
+        renderer.set_glint(!self.mods.no_enchants());
         // The body of the player is part of the picture in the third person.
         renderer.set_motion_blur_body(
             self.world

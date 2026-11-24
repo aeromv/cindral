@@ -32,6 +32,7 @@ use crate::options::{Action, Binding, Options};
 mod catalog;
 mod chat_page;
 mod controls_page;
+mod display_page;
 mod language_page;
 mod layout;
 mod main_page;
@@ -71,6 +72,8 @@ pub enum Page {
     Snooper,
     /// Cindral's theme picker (ADR-0078).
     Theme,
+    /// The fullscreen resolution and the Alt+Tab switch.
+    Display,
 }
 
 /// What one frame of the screen did.
@@ -274,6 +277,7 @@ impl OptionsScreen {
             Page::Language => self.show_language(ui, atlas, options, gui, lang, &mut outcome),
             Page::Snooper => self.show_snooper(ui, atlas, options, gui, lang, &mut outcome),
             Page::Theme => self.show_theme(ui, atlas, options, gui, lang, &mut outcome),
+            Page::Display => self.show_display(ui, atlas, options, gui, lang, &mut outcome),
         }
         ui.pop_id();
         outcome

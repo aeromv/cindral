@@ -410,6 +410,8 @@ pub struct Renderer {
     fullbright: bool,
     /// The hurt tint of the entities (`CameraUniform::hurt_color`).
     hurt_color: [f32; 4],
+    /// Whether the enchantment glint is drawn (off with the No Enchants mod).
+    glint_enabled: bool,
     entity_batches: BatchBuffer,
     /// The glowing layers of the entities, drawn after them.
     additive_batches: BatchBuffer,

@@ -23,11 +23,11 @@ mod keystrokes;
 mod legacy_animations;
 mod memory;
 mod motion_blur;
+mod no_enchants;
 mod no_hurt_cam;
 mod ping;
 mod potion_effects;
 mod reach_display;
-mod speed;
 mod toggle_sprint;
 mod zoom;
 
@@ -47,7 +47,6 @@ pub fn all() -> Vec<Box<dyn BuiltinMod>> {
         Box::new(keystrokes::Keystrokes::default()),
         Box::new(combo_counter::ComboCounter::default()),
         Box::new(reach_display::ReachDisplay::default()),
-        Box::new(speed::Speed::default()),
         Box::new(item_counter::ItemCounter),
         Box::new(clock::Clock),
         Box::new(memory::Memory),
@@ -57,6 +56,7 @@ pub fn all() -> Vec<Box<dyn BuiltinMod>> {
         Box::new(motion_blur::MotionBlur),
         Box::new(fullbright::Fullbright),
         Box::new(hit_color::HitColor),
+        Box::new(no_enchants::NoEnchants),
         Box::new(zoom::Zoom),
         Box::new(no_hurt_cam::NoHurtCam),
         Box::new(legacy_animations::LegacyAnimations),

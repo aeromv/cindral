@@ -52,6 +52,13 @@ impl ApplicationHandler for App {
         };
         let surface_size = window.inner_size();
         self.resize(surface_size.width, surface_size.height);
+        // The resolutions of the Display page.
+        if let Some(monitor) = window.current_monitor() {
+            crate::options::display_modes::set(monitor.video_modes().map(|mode| {
+                let size = mode.size();
+                (size.width, size.height)
+            }));
+        }
 
         let backends = match self.args.backend.as_deref() {
             Some("dx12") | Some("directx12") => {
@@ -222,6 +229,11 @@ impl ApplicationHandler for App {
             // free as before.
             WindowEvent::Focused(true) => {
                 self.focused = true;
+                self.options_menu.video_applier.set_focused(
+                    true,
+                    &self.options.video,
+                    self.window.as_deref(),
+                );
                 if self.session.is_some()
                     && self.screen() == Screen::None
                     && !self.death_screen_visible()
@@ -231,6 +243,11 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Focused(false) => {
                 self.focused = false;
+                self.options_menu.video_applier.set_focused(
+                    false,
+                    &self.options.video,
+                    self.window.as_deref(),
+                );
                 // A fullscreen game left in the background would show through a
                 // transparent taskbar, so it goes to the taskbar instead.
                 if let Some(window) = self.window.as_ref().filter(|w| w.fullscreen().is_some()) {

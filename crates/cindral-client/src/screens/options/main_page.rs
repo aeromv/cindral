@@ -76,19 +76,18 @@ impl OptionsScreen {
             self.open(Page::Theme, options);
         }
 
-        // (id, label key, y offset, x): the pages the client has no backend
-        // for (shaders, stream) are drawn and inert.
-        let entries: [(&str, &str, f32, f32); 10] = [
+        // (id, label key, y offset, x). Super Secret Settings and the Twitch
+        // stream are gone: the client has nothing behind them. The Display
+        // page (fullscreen resolution) closes the list.
+        let entries: [(&str, &str, f32, f32); 8] = [
             ("skin", "options.skinCustomisation", 48.0, left),
-            ("shaders", "cindral.options.shaders", 48.0, right),
-            ("sounds", "options.sounds", 72.0, left),
-            ("stream", "options.stream", 72.0, right),
-            ("nav:video", "options.video", 96.0, left),
-            ("nav:controls", "options.controls", 96.0, right),
-            ("language", "options.language", 120.0, left),
-            ("nav:chat", "options.chat.title", 120.0, right),
-            ("resourcepacks", "options.resourcepack", 144.0, left),
-            ("snooper", "options.snooper.view", 144.0, right),
+            ("sounds", "options.sounds", 48.0, right),
+            ("nav:video", "options.video", 72.0, left),
+            ("nav:controls", "options.controls", 72.0, right),
+            ("language", "options.language", 96.0, left),
+            ("nav:chat", "options.chat.title", 96.0, right),
+            ("resourcepacks", "options.resourcepack", 120.0, left),
+            ("snooper", "options.snooper.view", 120.0, right),
         ];
         for (id, key, row, x) in entries {
             let rect = gui.rect(x, h6 + row - 6.0, HALF_W, BUTTON_H);
@@ -102,12 +101,17 @@ impl OptionsScreen {
                     "language" => Page::Language,
                     "resourcepacks" => Page::ResourcePacks,
                     "snooper" => Page::Snooper,
-                    // Vanilla opens a screen the client has no backend for
-                    // (shaders, Twitch stream).
                     _ => continue,
                 };
                 self.open(page, options);
             }
+        }
+
+        // Display, across the row: the resolution in use, a click for the list.
+        let display = gui.rect(left, h6 + 138.0, 310.0, BUTTON_H);
+        let label = display_text(lang, options);
+        if self.button(ui, atlas, "display", display, &label, true, None) {
+            self.open(Page::Display, options);
         }
 
         let done = gui.rect(cx - 100.0, h6 + 168.0, 200.0, BUTTON_H);
@@ -115,6 +119,15 @@ impl OptionsScreen {
             outcome.done = true;
         }
     }
+}
+
+/// The Display resolution as the hub shows it: "Display: 1600 x 900".
+fn display_text(lang: &Lang, options: &Options) -> String {
+    let value = crate::options::display_size(&options.video.display).map_or_else(
+        || lang.tr("cindral.options.display.desktop").to_string(),
+        |(width, height)| format!("{width} x {height}"),
+    );
+    option_label(lang, "cindral.options.display", &value)
 }
 
 /// The translated name of the current title screen style.

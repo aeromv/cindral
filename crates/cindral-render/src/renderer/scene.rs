@@ -253,6 +253,13 @@ impl Renderer {
         self.fullbright = on;
     }
 
+    /// Draws the enchantment glint or not (the No Enchants mod): in the hand,
+    /// on the entities, on dropped items and over the inventory icons. The
+    /// window calls this every frame.
+    pub fn set_glint(&mut self, enabled: bool) {
+        self.glint_enabled = enabled;
+    }
+
     /// The colour a hurt entity is blended towards, `0xRRGGBB`, and how far,
     /// `0.0` to `1.0` (the Hit Color mod); `None` is vanilla, 30 % towards
     /// pure red. The window calls this every frame.

@@ -27,7 +27,7 @@ client does.
 Measured on a Pentium Gold G5400 with Intel UHD 610 graphics, the kind of PC
 most clients are not tested on, with a 32x PvP pack enabled:
 
-| | Cindral 0.5 |
+| | Cindral 0.6 |
 |---|---|
 | Window on screen (loading screen) | 0.15 s |
 | Textures and resource pack ready | 1.0 to 1.5 s |
@@ -56,8 +56,8 @@ items, custom skies, custom colours, random and custom mob models, custom
 GUIs and fonts, and texture animations.
 
 **Settings that matter for PvP.** The first start sets the video options
-for your PC by itself. A Display option lowers the fullscreen resolution and
-stretches the picture for more FPS. Video presets, OptiFine-style quality and
+for your PC by itself. The Display page (Options) lists every resolution
+your monitor offers; a lower one is stretched in fullscreen for more FPS. Video presets, OptiFine-style quality and
 performance pages, Dynamic Lights, Smart Animations, a lagometer, per-type
 particle switches, and three interface themes (Ember, Amethyst, and Vanilla,
 which follows your pack's buttons).
@@ -134,7 +134,6 @@ turned on under **Options → Resource Packs**.
 | Direction HUD | A compass ruler along the top of the screen |
 | Reach Display | Distance of your last hit |
 | Combo Counter | Hits in a row before you are hit back |
-| Speed | Blocks per second |
 | Item Counter | Splash potions, golden apples, ender pearls and arrows left |
 | Armor Status | Each armor piece and the held item, with durability |
 | Potion Effects | Active effects with their level and time left |
@@ -149,6 +148,7 @@ turned on under **Options → Resource Packs**.
 | Fullbright | Full light in caves and at night |
 | No Hurt Cam | No camera tilt when you take damage |
 | Hit Color | A deeper red on players you hit, colour and strength adjustable |
+| No Enchants | No enchantment glint on swords, armour and items |
 | Motion Blur | Three styles of blur when turning |
 | Capes | Capes from OptiFine, MinecraftCapes, LabyMod and Cosmetica |
 

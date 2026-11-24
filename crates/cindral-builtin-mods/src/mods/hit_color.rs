@@ -24,7 +24,7 @@ const SETTINGS: &[SettingDef] = &[
     SettingDef {
         key: "color",
         label_key: "cindral.mods.hit_color.color",
-        kind: SettingKind::Color { default: "#c00000" },
+        kind: SettingKind::Color { default: "#800000" },
     },
     SettingDef {
         key: "strength",
@@ -33,7 +33,7 @@ const SETTINGS: &[SettingDef] = &[
             min: 0.1,
             max: 0.9,
             step: 0.05,
-            default: 0.5,
+            default: 0.6,
         },
     },
 ];
@@ -60,7 +60,7 @@ mod tests {
     fn it_starts_on_with_a_deeper_red_than_vanilla() {
         assert!(HitColor.meta().default_enabled);
         let settings = ModSettings::defaults(SETTINGS);
-        assert_eq!(super::super::parse_color(settings.text("color")), 0xC0_0000);
+        assert_eq!(super::super::parse_color(settings.text("color")), 0x80_0000);
         assert!(settings.number("strength") > 0.3, "stronger than vanilla");
         assert!(HitColor.hud().is_none(), "it draws no widget");
     }

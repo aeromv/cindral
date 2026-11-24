@@ -71,7 +71,7 @@ impl OptionsScreen {
 
     /// The box `GuiSlot` draws around the selected row: a grey border with a
     /// black inside.
-    fn selection_box(ui: &mut Ui, gui: Gui, cx: f32, y: f32) {
+    pub(super) fn selection_box(ui: &mut Ui, gui: Gui, cx: f32, y: f32) {
         let left = cx - LIST_WIDTH / 2.0;
         ui.draw().rect(
             gui.rect(left, y - 2.0, LIST_WIDTH, ROW),

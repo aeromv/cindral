@@ -79,15 +79,19 @@ fn the_hub_page_matches_gui_options() {
     );
     assert_eq!(
         screen.rect_of("nav:video"),
-        Some(gui_rect(58.0, 130.0, 150.0, 20.0))
+        Some(gui_rect(58.0, 106.0, 150.0, 20.0))
     );
     assert_eq!(
         screen.rect_of("nav:controls"),
-        Some(gui_rect(218.0, 130.0, 150.0, 20.0))
+        Some(gui_rect(218.0, 106.0, 150.0, 20.0))
     );
     assert_eq!(
         screen.rect_of("nav:chat"),
-        Some(gui_rect(218.0, 154.0, 150.0, 20.0))
+        Some(gui_rect(218.0, 130.0, 150.0, 20.0))
+    );
+    assert_eq!(
+        screen.rect_of("display"),
+        Some(gui_rect(58.0, 178.0, 310.0, 20.0))
     );
     assert_eq!(
         screen.rect_of("done"),
@@ -108,14 +112,28 @@ fn done_on_the_hub_closes_and_done_on_a_page_goes_back() {
 }
 
 #[test]
-fn a_hub_button_without_a_backend_does_nothing() {
+fn the_hub_has_no_super_secret_settings_and_opens_the_display_page() {
     let mut screen = OptionsScreen::new();
     let mut options = Options::default();
-    for id in ["shaders", "stream"] {
-        let outcome = click_widget(&mut screen, &mut options, id);
-        assert_eq!(screen.page(), Page::Main, "{id}");
-        assert_eq!(outcome, Outcome::default(), "{id}");
-    }
+    frame(&mut screen, &mut options, vec![]);
+    assert!(!screen.rects.contains_key("shaders"));
+    assert!(!screen.rects.contains_key("stream"));
+    click_widget(&mut screen, &mut options, "display");
+    assert_eq!(screen.page(), Page::Display);
+}
+
+#[test]
+fn the_display_page_lists_the_monitor_and_picks_one() {
+    crate::options::display_modes::set([(1920, 1080), (1600, 900)]);
+    let mut screen = OptionsScreen::new();
+    let mut options = Options::default();
+    screen.open_page(Page::Display, &options);
+    let outcome = click_widget(&mut screen, &mut options, "display:1600x900");
+    assert!(outcome.changed);
+    assert_eq!(options.video.display, "1600x900");
+    let outcome = click_widget(&mut screen, &mut options, "display:alt_tab");
+    assert!(outcome.changed);
+    assert!(!options.video.alt_tab_desktop);
 }
 
 #[test]

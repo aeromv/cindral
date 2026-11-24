@@ -21,7 +21,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 authors = ["Cindral contributors"]
 repository = "https://github.com/aeromv/cindral"
@@ -47,20 +47,20 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", 
 toml = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "std", "tracing-log"] }
-cindral-assets = { path = "crates/cindral-assets", version = "0.5.0" }
-cindral-core = { path = "crates/cindral-core", version = "0.5.0" }
-cindral-model = { path = "crates/cindral-model", version = "0.5.0" }
-cindral-net = { path = "crates/cindral-net", version = "0.5.0" }
-cindral-protocol = { path = "crates/cindral-protocol", version = "0.5.0" }
-cindral-world = { path = "crates/cindral-world", version = "0.5.0" }
-cindral-mesh = { path = "crates/cindral-mesh", version = "0.5.0" }
-cindral-render = { path = "crates/cindral-render", version = "0.5.0" }
-cindral-game = { path = "crates/cindral-game", version = "0.5.0" }
-cindral-ui = { path = "crates/cindral-ui", version = "0.5.0" }
-cindral-audio = { path = "crates/cindral-audio", version = "0.5.0" }
-cindral-auth = { path = "crates/cindral-auth", version = "0.5.0" }
-cindral-builtin-mods = { path = "crates/cindral-builtin-mods", version = "0.5.0" }
-cindral-packext = { path = "crates/cindral-packext", version = "0.5.0" }
+cindral-assets = { path = "crates/cindral-assets", version = "0.6.0" }
+cindral-core = { path = "crates/cindral-core", version = "0.6.0" }
+cindral-model = { path = "crates/cindral-model", version = "0.6.0" }
+cindral-net = { path = "crates/cindral-net", version = "0.6.0" }
+cindral-protocol = { path = "crates/cindral-protocol", version = "0.6.0" }
+cindral-world = { path = "crates/cindral-world", version = "0.6.0" }
+cindral-mesh = { path = "crates/cindral-mesh", version = "0.6.0" }
+cindral-render = { path = "crates/cindral-render", version = "0.6.0" }
+cindral-game = { path = "crates/cindral-game", version = "0.6.0" }
+cindral-ui = { path = "crates/cindral-ui", version = "0.6.0" }
+cindral-audio = { path = "crates/cindral-audio", version = "0.6.0" }
+cindral-auth = { path = "crates/cindral-auth", version = "0.6.0" }
+cindral-builtin-mods = { path = "crates/cindral-builtin-mods", version = "0.6.0" }
+cindral-packext = { path = "crates/cindral-packext", version = "0.6.0" }
 
 [workspace.lints.rust]
 missing_docs = "deny"

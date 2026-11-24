@@ -164,7 +164,6 @@ fn every_hud_mod_is_listed_on_or_off_with_its_lock() {
             ("keystrokes", false, false),
             ("combo_counter", false, false),
             ("reach_display", false, false),
-            ("speed", false, false),
             ("item_counter", false, false),
             ("clock", false, false),
             ("memory", false, false),

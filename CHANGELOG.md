@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.6.0 — 24 November 2026
+
+### Display
+- **Display** moved to the main Options page, across the bottom row. It
+  opens a list of every resolution the monitor offers (read from the
+  monitor, not a fixed list); a click picks one.
+- **Desktop resolution on Alt+Tab** (on by default, on the Display page):
+  leaving a fullscreen game at another resolution gives the desktop its
+  own back at once, and the game takes its own again when you return.
+- Leaving fullscreen always restores the desktop resolution and puts the
+  window back where it was and at its size; a game started in fullscreen
+  comes out centred at 1280x720 instead of somewhere off to the side.
+- Super Secret Settings and the Twitch stream button are gone: nothing was
+  behind them.
+
+### Mods
+- New **No Enchants**: no enchantment glint on swords, armour and items, in
+  the hand, on players, on the ground and in the inventory; the glint pass
+  is skipped entirely.
+- **Hit Color** starts on a much darker red (#800000 at 60 %). A colour
+  chosen before keeps its value.
+- **Speed** is removed: blocks per second does not help in a fight.
+
+### Knockback
+- A burst of more than 256 server packets (chunks, a crowded spawn) no
+  longer waits a frame between passes, so the knockback behind it is
+  applied on time.
+
 ## 0.5.0 — 23 November 2026
 
 ### Fewer setbacks

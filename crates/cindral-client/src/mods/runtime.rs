@@ -272,6 +272,14 @@ impl ModsRuntime {
         Some((rgb, view.settings.number("strength")))
     }
 
+    /// Whether the No Enchants mod is on: no enchantment glint anywhere.
+    #[must_use]
+    pub fn no_enchants(&self) -> bool {
+        self.registry
+            .mods()
+            .any(|view| view.meta.id.as_str() == "no_enchants" && view.enabled)
+    }
+
     /// Whether the Fullbright mod is on: the world is lit at full strength.
     #[must_use]
     pub fn fullbright(&self) -> bool {

@@ -22,7 +22,9 @@ impl Renderer {
         pass.set_pipeline(&self.terrain_pipeline);
         pass.set_bind_group(0, &self.hand_item_bind_group, &[]);
         self.hand_items.draw(pass);
-        self.world_glint.draw_hand(pass, &self.hand_item_bind_group);
+        if self.glint_enabled {
+            self.world_glint.draw_hand(pass, &self.hand_item_bind_group);
+        }
     }
 
     pub(super) fn draw(
@@ -114,8 +116,10 @@ impl Renderer {
         pass.set_pipeline(&self.terrain_pipeline);
         pass.set_bind_group(0, &self.local_terrain_bind_group, &[]);
         self.world_items.draw(&mut pass);
-        self.world_glint
-            .draw_world(&mut pass, &self.local_terrain_bind_group);
+        if self.glint_enabled {
+            self.world_glint
+                .draw_world(&mut pass, &self.local_terrain_bind_group);
+        }
         draw_stats.entities += self.draw_entity_overlays(&mut pass);
         self.stamp(&mut pass, 3);
 
@@ -307,7 +311,7 @@ impl Renderer {
             self.entity_renderer
                 .render_additive(pass, &self.local_camera_bind_group, batches);
         }
-        if !self.glint_batches.is_empty() {
+        if self.glint_enabled && !self.glint_batches.is_empty() {
             draws += self.glint_batches.batch_count();
             let batches = self.glint_batches.iter();
             self.entity_renderer
@@ -388,7 +392,7 @@ impl Renderer {
                         pass.set_bind_group(0, &self.icon_gui_bind_group, &[]);
                     }
                     UiBatchKind::IconGlint => {
-                        if !self.glint.bind(pass) {
+                        if !self.glint_enabled || !self.glint.bind(pass) {
                             continue;
                         }
                     }

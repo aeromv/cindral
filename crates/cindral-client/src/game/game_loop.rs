@@ -108,7 +108,11 @@ pub(super) fn run(
                     break;
                 }
             }
-            if pacing && events_processed > 0 {
+            // A pass that stopped at its limit leaves the slot open: the
+            // rest of a burst (chunks, a crowd of moving players) comes in
+            // the next pass, not one frame later, so the knockback behind
+            // it is not delayed.
+            if pacing && events_processed > 0 && events_processed < MAX_EVENTS_PER_PASS {
                 next_drain = Instant::now() + period;
             }
         }
