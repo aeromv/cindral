@@ -29,6 +29,7 @@ pub mod server_list;
 mod server_row;
 pub mod stats;
 pub mod title;
+pub mod update_card;
 
 pub use accounts::{
     account_row_at, account_row_rect, accounts_layout, is_valid_username, name_dialog_layout,
@@ -73,3 +74,4 @@ pub use title::{
     modern_title_layout, title_layout, ModernTitleLayout, TitleInfo, TitleLayout, TitleOutcome,
     TitleScreen, TitleStyle, LOGO_TEXT, SPLASHES, WORDMARK,
 };
+pub use update_card::{UpdateCard, UpdateView};

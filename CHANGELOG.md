@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.9.0 — 24 November 2026
+
+### Fewer setbacks, steadier ping
+- Ticks no longer start late behind a long batch of packets. Chunk columns
+  are decoded on the game thread, and on a two-core CPU a batch of a few
+  chunk packets ran past the start of the next tick; that tick then went
+  out late, together with the next one. Servers read two movement packets
+  at once as a timer cheat, or the knockback in them as taken a tick late,
+  and pulled the player back (a session on a Pentium G5400 had 91 setbacks
+  in 22 minutes, most of them on the steps of a knockback). The replies to
+  the server's checks also waited, which shows as a higher ping. A batch
+  now stops when a tick is due; the rest of the packets follow right after
+  it, in the same order.
+- `logs/latest.log` now explains setbacks: each one says how many ticks
+  ago the last knockback and the last late tick were, and whether the
+  player was sprinting or using an item. Once a minute the game thread
+  writes how many ticks were late, how late, and how long its longest tick
+  and packet batch took.
+
+### The world appears faster
+- Chunks go to the renderer nearest to the player first. When the server
+  sends a whole view distance at once (joining, a respawn, a new map), they
+  went in coordinate order, so the ground under the player could wait
+  behind chunks far away.
+- Chunks go to the renderer as soon as they arrive, not at the next tick.
+
+### Resource packs
+- Mini items packs work with the 1.7 Animations mod. The 1.7 position of a
+  held item ignored the pack's `firstperson` pose; the pack's change from
+  the vanilla pose (size and place) now applies on top of it.
+- A pack zipped inside its own folder (`MyPack.zip/MyPack/assets/...`)
+  loads. It loaded as an empty pack before.
+
+### Updates
+- The title screen says when a new version is out. One click downloads it
+  in the background, checks it against the SHA-256 GitHub lists for it,
+  installs it and restarts Cindral. A portable `cindral.exe` replaces
+  itself.
+
 ## 0.8.0 — 24 November 2026
 
 ### Loading screen

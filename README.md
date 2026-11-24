@@ -34,7 +34,8 @@ like the normal game does. Because of that:
 3. The installer downloads the Minecraft 1.8.8 textures and sounds from
    Mojang (about 110 MB). Cindral doesn't ship any Mojang files.
 
-To update, run the new installer over the old one.
+When a new version is out, the title screen tells you. Click **Update**:
+it downloads in the background, installs, and restarts Cindral.
 
 You can also use `cindral.exe` alone, without installing. Keep
 `dxcompiler.dll` in the same folder so it starts faster.
@@ -103,7 +104,8 @@ Put packs in `%APPDATA%\cindral\resourcepacks` and turn them on in
 **Options → Resource Packs**. PvP packs and server packs work, including
 the OptiFine features most packs use: connected textures, custom items,
 custom sky and colours, custom mob models, custom GUIs and fonts, and
-animated textures.
+animated textures. Mini items packs work, also with 1.7 Animations, and a
+pack zipped inside its own folder loads too.
 
 ## Controls
 

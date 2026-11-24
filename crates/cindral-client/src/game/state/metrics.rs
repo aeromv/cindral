@@ -32,6 +32,85 @@ pub(in crate::game) struct TickMetrics {
     pub(in crate::game) last_input_processing_us: u32,
     /// Queuing latency of the most recent input update, in microseconds.
     pub(in crate::game) last_input_queue_latency_us: u32,
+    /// The game tick of the last catch-up tick, for the setback lines.
+    pub(in crate::game) last_catch_up_tick: Option<u64>,
+    /// The game tick at which the last knockback of the player arrived.
+    pub(in crate::game) knockback_tick: Option<u64>,
+    /// The minute summary of the game thread in the log.
+    pub(in crate::game) minute: MinuteHealth,
+}
+
+/// How punctual the game thread was over the last minute: late ticks are
+/// sent in bursts, which servers read as a timer cheat or as knockback
+/// taken a tick late, and answer with a setback.
+#[derive(Debug, Clone, Copy)]
+pub(in crate::game) struct MinuteHealth {
+    since: Instant,
+    catch_ups: u32,
+    bursts: u32,
+    late_max: Duration,
+    tick_max: Duration,
+    pass_max: Duration,
+    split_passes: u32,
+}
+
+/// How often the game thread writes its summary.
+const MINUTE: Duration = Duration::from_secs(60);
+
+impl MinuteHealth {
+    fn new(now: Instant) -> Self {
+        Self {
+            since: now,
+            catch_ups: 0,
+            bursts: 0,
+            late_max: Duration::ZERO,
+            tick_max: Duration::ZERO,
+            pass_max: Duration::ZERO,
+            split_passes: 0,
+        }
+    }
+
+    /// Records a run of `ran` ticks, the first `late` after its instant.
+    pub(in crate::game) fn ticks(&mut self, ran: u32, late: Duration) {
+        self.late_max = self.late_max.max(late);
+        if ran > 1 {
+            self.bursts += 1;
+            self.catch_ups += ran - 1;
+        }
+    }
+
+    /// Records how long one tick ran.
+    pub(in crate::game) fn tick_time(&mut self, elapsed: Duration) {
+        self.tick_max = self.tick_max.max(elapsed);
+    }
+
+    /// Records a pass over the network events; `split` when it stopped
+    /// to let a due tick run.
+    pub(in crate::game) fn pass(&mut self, elapsed: Duration, split: bool) {
+        self.pass_max = self.pass_max.max(elapsed);
+        if split {
+            self.split_passes += 1;
+        }
+    }
+
+    /// The summary line once a minute is over, then a new minute.
+    pub(in crate::game) fn line(&mut self, now: Instant) -> Option<String> {
+        if now.saturating_duration_since(self.since) < MINUTE {
+            return None;
+        }
+        let ms = |duration: Duration| duration.as_secs_f64() * 1000.0;
+        let line = format!(
+            "game thread: {} catch-up ticks in {} bursts, latest tick {:.0} ms late, longest tick {:.1} ms, longest packet pass {:.1} ms, {} passes split for a tick",
+            self.catch_ups,
+            self.bursts,
+            ms(self.late_max),
+            ms(self.tick_max),
+            ms(self.pass_max),
+            self.split_passes
+        );
+        *self = Self::new(now);
+        Some(line)
+    }
 }
 
 impl Default for TickMetrics {
@@ -50,6 +129,9 @@ impl Default for TickMetrics {
             last_net_micros: 0,
             last_input_processing_us: 0,
             last_input_queue_latency_us: 0,
+            last_catch_up_tick: None,
+            knockback_tick: None,
+            minute: MinuteHealth::new(Instant::now()),
         }
     }
 }
@@ -90,6 +172,7 @@ impl TickMetrics {
 
     /// Records how long a tick ran.
     pub(in crate::game) fn record_tick_time(&mut self, elapsed: Duration) {
+        self.minute.tick_time(elapsed);
         let tick_us = micros(elapsed);
         self.last_tick_micros = tick_us;
         self.max_tick_micros = self.max_tick_micros.max(tick_us);
@@ -117,6 +200,25 @@ fn micros(duration: Duration) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_minute_line_counts_bursts_and_splits_then_starts_again() {
+        let start = Instant::now();
+        let mut minute = MinuteHealth::new(start);
+        minute.ticks(1, Duration::from_millis(2));
+        minute.ticks(3, Duration::from_millis(120));
+        minute.tick_time(Duration::from_micros(4_500));
+        minute.pass(Duration::from_millis(30), true);
+        assert_eq!(minute.line(start + Duration::from_secs(10)), None);
+        assert_eq!(
+            minute.line(start + MINUTE).as_deref(),
+            Some("game thread: 2 catch-up ticks in 1 bursts, latest tick 120 ms late, longest tick 4.5 ms, longest packet pass 30.0 ms, 1 passes split for a tick")
+        );
+        assert!(minute
+            .line(start + MINUTE * 2)
+            .unwrap()
+            .starts_with("game thread: 0 catch-up"));
+    }
 
     #[test]
     fn a_duration_saturates_at_the_largest_u32() {

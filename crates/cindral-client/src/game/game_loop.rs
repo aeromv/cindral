@@ -20,7 +20,7 @@ use super::creative_events::apply_creative_event;
 use super::inventory_events::{apply_inventory_action, report_inventory_opened};
 use super::messages::{GameEvent, RenderEvent};
 use super::net::handle_net;
-use super::publish::{publish_inventory, publish_look, publish_status};
+use super::publish::{publish_chunks, publish_inventory, publish_look, publish_status};
 use super::session::GameChannels;
 use super::state::Game;
 use super::tick::tick;
@@ -97,8 +97,22 @@ pub(super) fn run(
         let pacing = !period.is_zero();
         let mut events_processed = 0;
         let now = Instant::now();
+        // A pass also stops once the next tick is due (plus a little grace):
+        // chunk columns are decoded here, and on a two-core CPU a pass of a
+        // few chunk bulks ran past the tick, which then went out late and in
+        // a burst with the next one. Servers read a burst as a timer cheat,
+        // or the knockback in it as taken a tick late, and pulled the player
+        // back; the replies to their ping checks waited too. The rest of the
+        // events follow right after the tick, in order: the transaction
+        // replies keep the server aware of what the tick had seen.
+        let mut split = false;
         if !pacing || now >= next_drain || now >= next_tick {
+            let deadline = next_tick.max(now) + PASS_GRACE;
             while events_processed < MAX_EVENTS_PER_PASS {
+                if events_processed > 0 && Instant::now() >= deadline {
+                    split = true;
+                    break;
+                }
                 let Some(event) = deferred.pop_front().or_else(|| events.try_recv().ok()) else {
                     break;
                 };
@@ -108,11 +122,14 @@ pub(super) fn run(
                     break;
                 }
             }
+            if events_processed > 0 {
+                game.metrics.minute.pass(now.elapsed(), split);
+            }
             // A pass that stopped at its limit leaves the slot open: the
             // rest of a burst (chunks, a crowd of moving players) comes in
             // the next pass, not one frame later, so the knockback behind
             // it is not delayed.
-            if pacing && events_processed > 0 && events_processed < MAX_EVENTS_PER_PASS {
+            if pacing && events_processed > 0 && events_processed < MAX_EVENTS_PER_PASS && !split {
                 next_drain = Instant::now() + period;
             }
         }
@@ -120,6 +137,10 @@ pub(super) fn run(
             break;
         }
         queue.flush();
+        // Chunks that arrived go to the renderer now, not at the next tick.
+        if events_processed > 0 {
+            publish_chunks(&mut game, &chunks);
+        }
 
         game.metrics.net_queue_len = events.len();
 
@@ -131,12 +152,22 @@ pub(super) fn run(
             let mut catches = 0;
             // A congested queue stops the ticks (see `PENDING_LIMIT`); the
             // clamp below then waits one tick length before trying again.
+            let late = now.saturating_duration_since(next_tick);
             while catches < due && !queue.congested() {
                 game.metrics
                     .record_tick_delay(now.saturating_duration_since(next_tick), catches > 0);
+                if catches > 0 {
+                    game.metrics.last_catch_up_tick = Some(game.status_data.ticks);
+                }
                 tick(&mut game, &mut queue, &frames, &chunks, next_tick);
                 next_tick += TICK;
                 catches += 1;
+            }
+            game.metrics.minute.ticks(catches, late);
+            if let Some(line) = game.metrics.minute.line(Instant::now()) {
+                if game.world.is_some() {
+                    tracing::info!("{line}");
+                }
             }
             if next_tick <= now {
                 // The thread fell too far behind (more than
@@ -151,7 +182,9 @@ pub(super) fn run(
         if now >= next_tick {
             continue;
         }
-        if events_processed == MAX_EVENTS_PER_PASS && !events.is_empty() {
+        if (events_processed == MAX_EVENTS_PER_PASS || split)
+            && (!events.is_empty() || !deferred.is_empty())
+        {
             continue;
         }
 
@@ -196,6 +229,10 @@ pub(super) fn run(
         let _ = frames.send(RenderEvent::Ended(reason));
     }
 }
+
+/// How far past the start of the next tick a pass of network events may
+/// run before it stops for the tick.
+const PASS_GRACE: Duration = Duration::from_millis(4);
 
 /// The most ticks one pass runs after a stall. MCP `Timer.updateTimer`
 /// caps `elapsedTicks` at 10, so after a hitch the vanilla client runs up to

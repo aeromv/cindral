@@ -400,6 +400,21 @@ impl App {
                     version: LOADING_VERSION,
                     opacity,
                 });
+                let update_state = self.updater.as_ref().map(crate::updater::Updater::state);
+                let update = update_state.as_ref().and_then(|state| {
+                    use crate::updater::UpdateState;
+                    match state {
+                        UpdateState::Idle => None,
+                        UpdateState::Available { version } => {
+                            Some(cindral_ui::menus::UpdateView::Available { version })
+                        }
+                        UpdateState::Downloading(done) => {
+                            Some(cindral_ui::menus::UpdateView::Downloading(*done))
+                        }
+                        UpdateState::Restarting => Some(cindral_ui::menus::UpdateView::Restarting),
+                        UpdateState::Failed(_) => Some(cindral_ui::menus::UpdateView::Failed),
+                    }
+                });
                 let context = MenuContext {
                     stats_revision: self.world.as_ref().map_or(0, WorldView::stats_revision),
                     stats_loading: self.world.as_ref().is_some_and(WorldView::stats_loading),
@@ -417,6 +432,7 @@ impl App {
                     brand_font: self.assets.brand_atlas.as_ref().unwrap_or(atlas),
                     mods: &mods_view,
                     loading,
+                    update,
                 };
                 let shown = self
                     .menu

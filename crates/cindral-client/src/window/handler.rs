@@ -289,6 +289,16 @@ impl ApplicationHandler for App {
         self.discord
             .show(Status::of(self.screen(), self.session.is_some()));
         self.poll_first_run();
+        // A started update closes the game; the new one opens by itself.
+        if self
+            .updater
+            .as_ref()
+            .is_some_and(|updater| updater.state() == crate::updater::UpdateState::Restarting)
+        {
+            self.save_options();
+            event_loop.exit();
+            return;
+        }
         let now = Instant::now();
         if now + Duration::from_micros(500) >= self.clock.next_frame {
             if !self.window_shown && self.window.is_some() {

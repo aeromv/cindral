@@ -162,6 +162,9 @@ struct App {
     hitches: crate::debug::stutter::HitchLog,
     /// The download of the game files on the first launch, while it runs.
     first_run: Option<crate::first_run::FirstRun>,
+    /// The check for a newer Cindral and its install; `None` in scripted
+    /// runs (`--no-audio`).
+    updater: Option<crate::updater::Updater>,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     /// The uploaded title panorama, when the user's assets provide it.

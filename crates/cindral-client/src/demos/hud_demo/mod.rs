@@ -310,7 +310,7 @@ fn run_options(
 /// The title style of `view`: `title-modern` shows the modern screen when
 /// the brand font is bound, every other view the classic one.
 fn demo_title_style(view: &str, brand_ready: bool) -> TitleStyle {
-    let chosen = if view == "title-modern" {
+    let chosen = if matches!(view, "title-modern" | "title-update") {
         TitleStyle::Modern
     } else {
         TitleStyle::Classic
@@ -324,6 +324,7 @@ fn is_menu_view(view: &str) -> bool {
         view,
         "title"
             | "title-modern"
+            | "title-update"
             | "loading"
             | "servers"
             | "server-edit"
@@ -367,7 +368,7 @@ fn menu_scene(
         flow.assign_icon_sheets(atlas);
     }
     let screen = match view {
-        "title" | "title-modern" => Screen::Title,
+        "title" | "title-modern" | "title-update" => Screen::Title,
         "loading" => Screen::Loading,
         "server-edit" => Screen::ServerEdit,
         "connecting" => Screen::Connecting,
@@ -413,6 +414,8 @@ fn menu_scene(
             version: "Cindral",
             opacity: 1.0,
         }),
+        update: (view == "title-update")
+            .then_some(cindral_ui::menus::UpdateView::Downloading(0.42)),
     };
     if let Some(tab) = match view {
         "stats-blocks" => Some(StatsTab::Blocks),
@@ -560,9 +563,9 @@ fn build(
                 scene: draw_list,
             }
         }
-        "title" | "title-modern" | "servers" | "server-edit" | "connecting" | "disconnected"
-        | "stats" | "stats-blocks" | "stats-items" | "achievements" | "mods" | "mods_list"
-        | "hud-editor" | "hud-editor-list" => {
+        "title" | "title-modern" | "title-update" | "servers" | "server-edit" | "connecting"
+        | "disconnected" | "stats" | "stats-blocks" | "stats-items" | "achievements" | "mods"
+        | "mods_list" | "hud-editor" | "hud-editor-list" => {
             let items = ItemView::new(None, DialFrames::default());
             let scene = (None, None, items);
             let fonts = (atlas, None);
@@ -764,7 +767,7 @@ pub fn run(args: &Args) -> Result<(), ClientError> {
         .then(|| stats::load_items(&mut renderer))
         .flatten();
     let (demo, panorama) = if is_menu_view(view) {
-        let textures = if matches!(view, "title" | "title-modern") {
+        let textures = if matches!(view, "title" | "title-modern" | "title-update") {
             panorama::upload(args, &mut renderer)
         } else {
             None

@@ -289,6 +289,7 @@ impl App {
         } else {
             crate::first_run::FirstRun::start_if_needed()
         };
+        let updater = (!args.no_audio).then(crate::updater::Updater::start);
         let audio = if args.no_audio {
             AudioBridge::disabled()
         } else {
@@ -309,6 +310,7 @@ impl App {
             },
             discord: crate::discord::Presence::spawn(),
             first_run,
+            updater,
             window_shown: false,
             splash: Splash::new(progress),
             stutters: crate::debug::stutter::StutterLog::new(std::time::Instant::now()),

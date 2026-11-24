@@ -121,9 +121,19 @@ fn read_zip_header(path: &Path) -> AssetsResult<Header> {
         source,
     })?;
     let archive = ZipArchive::open(data)?;
+    // A pack zipped inside its folder keeps its header there too.
+    let names: Vec<String> = archive
+        .entries()
+        .iter()
+        .map(|entry| crate::resource_pack::normalize_virtual_path(&entry.name))
+        .collect();
+    let folder = crate::resource_pack::nested_folder(&names).unwrap_or_default();
     let read = |name: &str| {
+        let wanted = format!("{folder}{name}");
         archive
-            .entry(name)
+            .entries()
+            .iter()
+            .find(|entry| crate::resource_pack::normalize_virtual_path(&entry.name) == wanted)
             .and_then(|entry| archive.read(entry).ok())
     };
     let metadata = read(PACK_MCMETA).and_then(|bytes| PackMetadata::parse(&bytes).ok());

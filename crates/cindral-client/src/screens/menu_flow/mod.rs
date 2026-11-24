@@ -25,6 +25,7 @@ use cindral_ui::menus::{
     LoadingScreen, LoadingView, ModsOutcome, ModsScreen, ModsView, PanoramaTextures, PanoramaView,
     RowStatus, ServerEditOutcome, ServerEditScreen, ServerListOutcome, ServerListScreen, ServerRow,
     StatsData, StatsOutcome, StatsScreen, TitleInfo, TitleOutcome, TitleScreen, TitleStyle,
+    UpdateCard, UpdateView,
 };
 use cindral_ui::{FontAtlas, Ui};
 
@@ -67,6 +68,8 @@ pub enum MenuCommand {
     Quit,
     /// Show another screen.
     GoTo(Screen),
+    /// Download and install the update the title screen offers.
+    Update,
     /// Apply a change the player made on the mods menu (a switch, a setting or
     /// a HUD widget) and save it.
     Mods(ModsOutcome),
@@ -104,6 +107,9 @@ pub struct MenuContext<'a> {
     /// The loading screen: its progress while loading, then its fade over
     /// the next screen; `None` once it is gone.
     pub loading: Option<LoadingView<'a>>,
+    /// The update card of the title screen; `None` when there is nothing
+    /// to offer.
+    pub update: Option<UpdateView<'a>>,
 }
 
 /// The result of one menu frame.
@@ -292,7 +298,17 @@ impl MenuFlow {
         self.poll();
         let mut panorama = None;
         let command = match screen {
-            Screen::Title => self.show_title(ui, atlas, lang, context, &mut panorama),
+            Screen::Title => {
+                let title = self.show_title(ui, atlas, lang, context, &mut panorama);
+                let update = context
+                    .update
+                    .is_some_and(|view| UpdateCard::show(ui, context.brand_font, view));
+                if update {
+                    Some(MenuCommand::Update)
+                } else {
+                    title
+                }
+            }
             Screen::Loading => {
                 let view = context.loading.unwrap_or(LoadingView {
                     fraction: 0.0,

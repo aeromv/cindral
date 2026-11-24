@@ -218,9 +218,22 @@ impl ResourcePack {
         let mut metadata = None;
         let mut icon = None;
         let mut total = 0_u64;
+        let names: Vec<String> = archive
+            .entries()
+            .iter()
+            .map(|entry| normalize_virtual_path(&entry.name))
+            .collect();
+        let folder = nested_folder(&names);
 
         for entry in archive.entries() {
             let normalized = normalize_virtual_path(&entry.name);
+            let normalized = match folder.as_deref() {
+                Some(folder) => match normalized.strip_prefix(folder) {
+                    Some(inside) => inside.to_string(),
+                    None => continue,
+                },
+                None => normalized,
+            };
             if is_ignored_path(&normalized) {
                 continue;
             }
@@ -395,8 +408,35 @@ fn read_files_in_parallel(files: Vec<(String, PathBuf)>) -> Vec<(String, Vec<u8>
 }
 
 /// Normalizes archive paths by removing leading slashes and handling backslashes.
-fn normalize_virtual_path(path: &str) -> String {
+pub(crate) fn normalize_virtual_path(path: &str) -> String {
     path.replace('\\', "/").trim_start_matches('/').to_string()
+}
+
+/// The folder (`"MyPack/"`) a zip keeps its pack in, when the pack is not
+/// at the root of the archive: zipping the pack's folder instead of its
+/// contents is a common mistake, and such a pack loaded as an empty one.
+/// `None` when the root holds `pack.mcmeta` or `assets/`, or when no single
+/// folder one level down does.
+pub(crate) fn nested_folder(names: &[String]) -> Option<String> {
+    let at_root = |name: &str| name == PACK_MCMETA || name.starts_with("assets/");
+    if names.iter().any(|name| at_root(name)) {
+        return None;
+    }
+    let mut found: Option<&str> = None;
+    for name in names {
+        let Some((folder, rest)) = name.split_once('/') else {
+            continue;
+        };
+        if folder.is_empty() || folder == "__MACOSX" || !at_root(rest) {
+            continue;
+        }
+        match found {
+            None => found = Some(folder),
+            Some(previous) if previous == folder => {}
+            Some(_) => return None,
+        }
+    }
+    found.map(|folder| format!("{folder}/"))
 }
 
 /// An ordered stack of resource packs layered over base client resources.
@@ -468,5 +508,37 @@ impl ResourceStack {
             return Ok(base.clone());
         }
         base.apply_packs(&self.packs)
+    }
+}
+
+#[cfg(test)]
+mod nested_tests {
+    use super::*;
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|name| (*name).to_string()).collect()
+    }
+
+    #[test]
+    fn a_pack_zipped_inside_its_folder_is_found_in_that_folder() {
+        assert_eq!(
+            nested_folder(&names(&[
+                "Bedwars 16x/",
+                "Bedwars 16x/pack.mcmeta",
+                "Bedwars 16x/assets/minecraft/textures/items/iron_sword.png",
+                "__MACOSX/Bedwars 16x/._pack.mcmeta",
+            ])),
+            Some("Bedwars 16x/".to_string())
+        );
+        assert_eq!(
+            nested_folder(&names(&["pack.mcmeta", "assets/minecraft/a.png"])),
+            None,
+            "a pack at the root stays at the root"
+        );
+        assert_eq!(
+            nested_folder(&names(&["one/pack.mcmeta", "two/pack.mcmeta"])),
+            None,
+            "two packs in one zip: neither is guessed"
+        );
     }
 }

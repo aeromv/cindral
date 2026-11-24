@@ -104,6 +104,39 @@ pub fn legacy_flat_held_pose(turned: bool) -> Mat4 {
         * to_square
 }
 
+/// The `firstperson` scale of every flat item of the 1.8 jar.
+const VANILLA_FIRST_PERSON_SCALE: f32 = 1.7;
+/// The `firstperson` translation of every flat item of the 1.8 jar
+/// (`[0, 4, 2]` sixteenths), in blocks.
+const VANILLA_FIRST_PERSON_TRANSLATION: Vec3 = Vec3::new(0.0, 0.25, 0.125);
+
+/// [`legacy_flat_held_pose`] with the size and place a resource pack gave
+/// the item in the first-person hand.
+///
+/// The 1.7 place ignores the model's `firstperson` pose, so packs that
+/// shrink or move the held items ("mini items") had no effect with the 1.7
+/// Animations mod. The pack's change from the vanilla 1.8 pose (scale 1.7,
+/// translation `[0, 4, 2]`) is applied to the 1.7 place instead: the scale
+/// about the sprite's centre, the translation as 1.8 applies it (doubled
+/// with the model, before the place). A model without a `firstperson` pose
+/// keeps the plain 1.7 place.
+#[must_use]
+pub fn legacy_flat_held_pose_for(model: &ItemModel, turned: bool) -> Mat4 {
+    let plain = legacy_flat_held_pose(turned);
+    let own = model.transform(DisplayContext::FirstPerson);
+    if own == crate::display::ItemTransform::IDENTITY {
+        return plain;
+    }
+    let ratio = Vec3::from(own.scale) / VANILLA_FIRST_PERSON_SCALE;
+    let shift = (Vec3::from(own.translation) - VANILLA_FIRST_PERSON_TRANSLATION) * 2.0;
+    let centre = Vec3::splat(0.5);
+    Mat4::from_translation(shift)
+        * plain
+        * Mat4::from_translation(centre)
+        * Mat4::from_scale(ratio)
+        * Mat4::from_translation(-centre)
+}
+
 /// Model space to the frame of a dropped item (`RenderEntityItem`).
 ///
 /// Lit blocks are halved first (the extra `scale(0.5)` of the 3D branch);
@@ -157,6 +190,53 @@ mod tests {
         let turned = legacy_flat_held_pose(true).transform_point3(Vec3::ONE);
         let plain = pose.transform_point3(Vec3::ONE);
         assert!((turned - Vec3::new(-plain.x, plain.y, -plain.z)).length() < 1e-5);
+    }
+
+    fn first_person(scale: f32, translation: [f32; 3]) -> ItemModel {
+        let json = serde_json::json!({
+            "firstperson": {
+                "rotation": [0, -135, 25],
+                "translation": translation,
+                "scale": [scale, scale, scale]
+            }
+        });
+        ItemModel {
+            display: DisplayTransforms::parse(&json, "test").expect("valid display"),
+            ..model(false)
+        }
+    }
+
+    #[test]
+    fn a_pack_that_shrinks_held_items_shrinks_the_1_7_sprite_too() {
+        let plain = legacy_flat_held_pose(false);
+        let vanilla = legacy_flat_held_pose_for(&first_person(1.7, [0.0, 4.0, 2.0]), false);
+        assert!(
+            vanilla.abs_diff_eq(plain, 1e-5),
+            "the vanilla pose is the 1.7 place"
+        );
+        assert!(legacy_flat_held_pose_for(&model(false), false).abs_diff_eq(plain, 1e-6));
+
+        let mini = legacy_flat_held_pose_for(&first_person(0.85, [0.0, 4.0, 2.0]), false);
+        let span = |pose: Mat4| {
+            (pose.transform_point3(Vec3::new(1.0, 1.0, 0.5))
+                - pose.transform_point3(Vec3::new(0.0, 0.0, 0.5)))
+            .length()
+        };
+        assert!(
+            (span(mini) / span(plain) - 0.5).abs() < 1e-4,
+            "half the size"
+        );
+        let centre = Vec3::splat(0.5);
+        assert!(
+            (mini.transform_point3(centre) - plain.transform_point3(centre)).length() < 1e-5,
+            "shrunk about its centre"
+        );
+        let lowered = legacy_flat_held_pose_for(&first_person(1.7, [0.0, 0.0, 2.0]), false);
+        let moved = lowered.transform_point3(centre) - plain.transform_point3(centre);
+        assert!(
+            (moved - Vec3::new(0.0, -0.5, 0.0)).length() < 1e-5,
+            "{moved}"
+        );
     }
 
     #[test]

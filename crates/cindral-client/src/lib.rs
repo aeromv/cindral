@@ -48,6 +48,7 @@ pub mod setup_cli;
 mod test_support;
 pub mod thread_priority;
 pub mod timer_resolution;
+pub mod updater;
 pub mod window;
 pub mod world_view;
 

@@ -18,6 +18,8 @@ jpeg-decoder.workspace = true
 pollster = "1"
 serde.workspace = true
 serde_json.workspace = true
+reqwest = { workspace = true, features = ["json"] }
+sha2 = "0.11"
 thiserror.workspace = true
 tokio.workspace = true
 webbrowser = "1.2"

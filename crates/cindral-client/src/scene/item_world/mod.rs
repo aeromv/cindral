@@ -20,7 +20,7 @@ use cindral_mesh::item::{ItemMesh, ItemStyle};
 use cindral_mesh::VertexLight;
 use cindral_model::display::DisplayContext;
 use cindral_model::entity::BipedStyle;
-use cindral_model::item::pose::{context_pose, ground_pose, held_pose, legacy_flat_held_pose};
+use cindral_model::item::pose::{context_pose, ground_pose, held_pose, legacy_flat_held_pose_for};
 use cindral_model::item::{ItemGeometry, ItemModel};
 use cindral_model::ModelQuad;
 use cindral_world::LightLevel;
@@ -314,7 +314,7 @@ fn first_person_pose(model: &ItemModel, item_id: i16, hand: &HandPose) -> Mat4 {
     if hand.legacy_item_position && !model.gui_3d {
         // 1.7.10 `Item.shouldRotateAroundWhenRendering`.
         let turned = matches!(item_id, FISHING_ROD | CARROT_ON_A_STICK);
-        legacy_flat_held_pose(turned)
+        legacy_flat_held_pose_for(model, turned)
     } else {
         held_pose(model, DisplayContext::FirstPerson)
     }

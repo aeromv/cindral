@@ -124,11 +124,20 @@ pub(in crate::game) fn apply_placement(
             // feels; it goes to the log file so a session can be studied.
             let pulled = predicted.distance(position);
             if pulled > 0.05 && pulled < 32.0 {
+                // What led to it: a knockback a tick or two before points at
+                // its timing, a recent catch-up burst at the game thread.
+                let now = game.status_data.ticks;
+                let ago = |tick: Option<u64>| tick.map(|tick| now.saturating_sub(tick));
+                let sprinting = state.player().sprinting;
                 tracing::info!(
                     blocks = format_args!("{pulled:.2}"),
                     from = ?predicted,
                     to = ?position,
                     ping_ms = ?game.local_ping_ms(),
+                    knockback_ticks_ago = ?ago(game.metrics.knockback_tick),
+                    catch_up_ticks_ago = ?ago(game.metrics.last_catch_up_tick),
+                    sprinting,
+                    using_item = game.item_use.is_using(),
                     "setback: the server moved the player back",
                 );
             } else {
@@ -351,6 +360,7 @@ pub(super) fn respawn(game: &mut Game, packet: &Respawn, frames: &SyncSender<Ren
 pub(super) fn push_local_player(game: &mut Game, packet: &EntityVelocity) {
     // MCP `handleEntityVelocity` sets the motion of the local player:
     // the knockback of a hit, a fishing rod, a piston.
+    game.metrics.knockback_tick = Some(game.status_data.ticks);
     if let Some(state) = game.state.as_mut() {
         state.set_velocity(DVec3::new(
             f64::from(packet.velocity_x) / VELOCITY_UNITS,

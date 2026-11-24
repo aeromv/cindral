@@ -83,6 +83,11 @@ impl App {
                 self.disconnect();
             }
             MenuCommand::Mods(change) => self.apply_mods_change(&change),
+            MenuCommand::Update => {
+                if let Some(updater) = self.updater.as_ref() {
+                    updater.begin();
+                }
+            }
             MenuCommand::GoTo(screen) => self.set_screen(screen),
         }
     }
