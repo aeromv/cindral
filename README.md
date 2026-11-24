@@ -98,6 +98,25 @@ MinecraftCapes, LabyMod and Cosmetica for the capes of the players near
 you, which means it sends those players' names to them. Turn the mod off
 if you don't want that.
 
+<table>
+  <tr>
+    <td><img src=".github/assets/mods.png" alt="Mods menu"></td>
+    <td><img src=".github/assets/hud-editor.png" alt="HUD editor"></td>
+  </tr>
+  <tr>
+    <td align="center">Mods menu</td>
+    <td align="center">HUD editor</td>
+  </tr>
+  <tr>
+    <td><img src=".github/assets/display.png" alt="Display page"></td>
+    <td><img src=".github/assets/loading.png" alt="Loading screen"></td>
+  </tr>
+  <tr>
+    <td align="center">Options → Display</td>
+    <td align="center">Loading screen</td>
+  </tr>
+</table>
+
 ## Resource packs
 
 Put packs in `%APPDATA%\cindral\resourcepacks` and turn them on in
