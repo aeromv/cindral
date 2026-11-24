@@ -1,33 +1,44 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The splash screen shown while the textures, the packs and the sounds load
-//! in the background: the Cindral logo, the wordmark, its author, and a bar
-//! that keeps moving so the start never looks frozen.
-
-use std::sync::OnceLock;
-use std::time::Instant;
-
-use cindral_core::lang::Lang;
+//! The screen shown while the game starts: the logo, a bar that follows the
+//! real loading steps, the step's name and the version.
+//!
+//! It also fades out over the first screen after it, so the start ends with
+//! a short dissolve instead of a cut.
 
 use crate::context::Ui;
+use crate::draw::Color;
 use crate::geom::Rect;
-use crate::modern::{draw_text, measure_text, theme, Align};
+use crate::modern::{draw_text, theme, Align};
 use crate::text::FontAtlas;
 
-/// Height of the wordmark letters, in GUI units.
-const WORD_SIZE: f32 = 16.0;
-/// Extra space after each letter of the wordmark, as a fraction of its size.
-const TRACKING: f32 = 0.3;
 /// Edge of the logo, in GUI units.
-const LOGO: f32 = 34.0;
-/// Size of the bar, in GUI units.
-const BAR: (f32, f32) = (110.0, 2.0);
-/// Length of the moving part of the bar, as a fraction of the bar.
-const RUNNER: f32 = 0.32;
-/// Seconds for the moving part to cross the bar.
-const PERIOD: f32 = 1.1;
+const LOGO: f32 = 44.0;
+/// Width of the bar, in GUI units; narrower on a small window.
+const BAR_WIDTH: f32 = 150.0;
+/// Space between the logo and the bar, in GUI units.
+const GAP: f32 = 20.0;
+/// Margin of the corner texts, in GUI units.
+const MARGIN: f32 = 6.0;
+/// A flat background, a shade darker than the menus.
+const BACKGROUND: Color = [0.047, 0.044, 0.050, 1.0];
+/// The empty part of the bar.
+const TRACK: Color = [1.0, 1.0, 1.0, 0.09];
 
-/// The loading splash screen.
+/// What the loading screen shows this frame.
+#[derive(Debug, Clone, Copy)]
+pub struct LoadingView<'a> {
+    /// The filled share of the bar, `0.0..=1.0`.
+    pub fraction: f32,
+    /// What is being loaded ("Building block models").
+    pub step: &'a str,
+    /// The line in the bottom-left corner ("Cindral 0.8.0").
+    pub version: &'a str,
+    /// `1.0` while loading; lower while it fades over the next screen.
+    pub opacity: f32,
+}
+
+/// The loading screen.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LoadingScreen;
 
@@ -38,107 +49,70 @@ impl LoadingScreen {
         Self
     }
 
-    /// Draws one frame. `brand` is the brand face (the game font until it
-    /// is installed); the bar moves with the time since the first frame.
-    pub fn show(&self, ui: &mut Ui, brand: &FontAtlas, lang: &Lang) {
-        static START: OnceLock<Instant> = OnceLock::new();
-        let seconds = START.get_or_init(Instant::now).elapsed().as_secs_f32();
+    /// Draws one frame over the whole viewport. `brand` is the brand face
+    /// (the game font until it is installed).
+    pub fn show(&self, ui: &mut Ui, brand: &FontAtlas, view: &LoadingView<'_>) {
         let viewport = ui.viewport();
         let scale = crate::menus::common::Gui::new(viewport).scale;
-        ui.draw()
-            .vertical_gradient(viewport, theme::BACKDROP_TOP, theme::BACKDROP_BOTTOM);
+        ui.draw().set_opacity(view.opacity);
+        ui.draw().rect(viewport, BACKGROUND);
 
         let cx = viewport.x + viewport.width * 0.5;
         let cy = viewport.y + viewport.height * 0.5;
-        // A slow pulse on the logo, between 75 % and 100 %.
-        let pulse = 0.875 + 0.125 * (seconds * 2.4).sin();
-        let logo_edge = LOGO * scale;
-        let logo_top = cy - 46.0 * scale;
+        let logo = (LOGO * scale).round();
+        let logo_top = (cy - logo * 0.5 - GAP * scale * 0.5).round();
         if let Some(sheet) = ui.menu_art().brand.logo {
-            let rect = Rect::new(cx - logo_edge * 0.5, logo_top, logo_edge, logo_edge);
+            let rect = Rect::new((cx - logo * 0.5).round(), logo_top, logo, logo);
             let src = sheet.sub(0, 0, sheet.width, sheet.height);
-            ui.draw()
-                .image(src, rect, theme::with_opacity(theme::ACCENT, pulse));
+            ui.draw().image(src, rect, theme::TEXT);
         }
 
-        let word_y = logo_top + logo_edge + 14.0 * scale;
-        draw_tracked(ui, brand, "CINDRAL", (cx, word_y), WORD_SIZE * scale);
+        let bar = bar_rect(viewport, scale, logo_top + logo + GAP * scale);
+        ui.draw().rect(bar, TRACK);
+        let filled = (bar.width * view.fraction.clamp(0.0, 1.0)).round();
+        if filled > 0.0 {
+            ui.draw()
+                .rect(Rect::new(bar.x, bar.y, filled, bar.height), theme::ACCENT);
+        }
+
+        let small = theme::TEXT_SIZE_SMALL * scale;
+        let line_y = bar.y + bar.height + 7.0 * scale;
         draw_text(
             ui,
             brand,
-            "by AeroMV",
-            (cx, word_y + 13.0 * scale),
-            (
-                theme::TEXT_SIZE_SMALL * scale,
-                theme::TEXT_MUTED,
-                Align::Center,
-            ),
+            view.step,
+            (bar.x, line_y),
+            (small, theme::TEXT_MUTED, Align::Left),
         );
-
-        let bar_y = word_y + 26.0 * scale;
-        let bar = Rect::new(
-            cx - BAR.0 * scale * 0.5,
-            bar_y,
-            BAR.0 * scale,
-            (BAR.1 * scale).max(2.0),
-        );
-        ui.draw()
-            .rounded_rect(bar, bar.height * 0.5, [1.0, 1.0, 1.0, 0.08]);
-        let (start, end) = runner(seconds);
-        if end > start {
-            let moving = Rect::new(
-                bar.x + bar.width * start,
-                bar.y,
-                bar.width * (end - start),
-                bar.height,
-            );
-            ui.draw()
-                .rounded_rect(moving, bar.height * 0.5, theme::ACCENT);
-        }
-
-        let message = lang.get("menu.loading").unwrap_or("Loading resources...");
+        let percent = format!("{}%", (view.fraction.clamp(0.0, 1.0) * 100.0).round());
         draw_text(
             ui,
             brand,
-            message,
-            (cx, bar_y + 12.0 * scale),
-            (
-                theme::TEXT_SIZE_SMALL * scale,
-                theme::with_opacity(theme::TEXT_MUTED, 0.8),
-                Align::Center,
-            ),
+            &percent,
+            (bar.x + bar.width, line_y),
+            (small, theme::TEXT, Align::Right),
         );
+
+        let corner_y = viewport.y + viewport.height - MARGIN * scale - small * 0.5;
+        let faint = theme::with_opacity(theme::TEXT_MUTED, 0.6);
+        draw_text(
+            ui,
+            brand,
+            view.version,
+            (viewport.x + MARGIN * scale, corner_y),
+            (small, faint, Align::Left),
+        );
+        ui.draw().set_opacity(1.0);
     }
 }
 
-/// The lit part of the bar at `seconds`, as `(start, end)` fractions: a
-/// runner that enters on the left and leaves on the right.
-fn runner(seconds: f32) -> (f32, f32) {
-    let phase = (seconds / PERIOD).fract();
-    let head = phase * (1.0 + RUNNER);
-    ((head - RUNNER).max(0.0), head.min(1.0))
-}
-
-/// Draws `text` centred on `centre` with wide letter spacing.
-fn draw_tracked(ui: &mut Ui, brand: &FontAtlas, text: &str, centre: (f32, f32), size: f32) {
-    let gap = size * TRACKING;
-    let mut buffer = [0u8; 4];
-    let widths: Vec<f32> = text
-        .chars()
-        .map(|letter| measure_text(brand, letter.encode_utf8(&mut buffer), size))
-        .collect();
-    let total = widths.iter().sum::<f32>() + gap * (widths.len().saturating_sub(1)) as f32;
-    let mut x = centre.0 - total * 0.5;
-    for (letter, width) in text.chars().zip(widths) {
-        draw_text(
-            ui,
-            brand,
-            letter.encode_utf8(&mut buffer),
-            (x, centre.1),
-            (size, theme::TEXT, Align::Left),
-        );
-        x += width + gap;
-    }
+/// The bar: [`BAR_WIDTH`] wide (at most 80 % of the window), 2 GUI units
+/// high, centred, its top at `top`. Whole pixels, so it never blurs.
+fn bar_rect(viewport: Rect, scale: f32, top: f32) -> Rect {
+    let width = (BAR_WIDTH * scale).min(viewport.width * 0.8).round();
+    let height = (2.0 * scale).round().max(2.0);
+    let left = (viewport.x + (viewport.width - width) * 0.5).round();
+    Rect::new(left, top.round(), width, height)
 }
 
 #[cfg(test)]
@@ -146,14 +120,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_runner_crosses_the_bar_and_stays_inside_it() {
-        assert_eq!(runner(0.0), (0.0, 0.0));
-        for step in 0..100 {
-            let (start, end) = runner(step as f32 * 0.037);
-            assert!((0.0..=1.0).contains(&start) && (0.0..=1.0).contains(&end));
-            assert!(start <= end);
-        }
-        let (start, end) = runner(PERIOD * 0.5);
-        assert!(end - start > 0.2, "half way the runner is fully in");
+    fn the_bar_is_centred_whole_pixels_and_fits_small_windows() {
+        let wide = bar_rect(Rect::new(0.0, 0.0, 1280.0, 720.0), 2.0, 400.3);
+        assert_eq!(
+            (wide.x, wide.y, wide.width, wide.height),
+            (490.0, 400.0, 300.0, 4.0)
+        );
+        let narrow = bar_rect(Rect::new(0.0, 0.0, 200.0, 150.0), 2.0, 10.0);
+        assert_eq!(narrow.width, 160.0);
+        assert_eq!(narrow.x, 20.0);
+        let tiny_scale = bar_rect(Rect::new(0.0, 0.0, 640.0, 480.0), 0.5, 0.0);
+        assert_eq!(tiny_scale.height, 2.0, "never thinner than two pixels");
     }
 }

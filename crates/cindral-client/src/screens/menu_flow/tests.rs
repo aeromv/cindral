@@ -105,6 +105,7 @@ pub(super) fn frame_core(
         title_style,
         brand_font: &atlas,
         mods,
+        loading: None,
     };
     let result = flow.show(
         screen,
@@ -268,6 +269,7 @@ fn the_add_form_starts_with_the_default_server_name() {
         title_style: TitleStyle::Classic,
         brand_font: &atlas,
         mods: &ModsView::default(),
+        loading: None,
     };
     let inputs = [
         vec![],

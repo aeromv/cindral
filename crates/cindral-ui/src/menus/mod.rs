@@ -47,7 +47,7 @@ pub use common::ScrollbarDrag;
 pub use confirm::{confirm_layout, ConfirmLayout, ConfirmOutcome, ConfirmScreen};
 pub use connecting::{connecting_cancel_rect, ConnectStage, ConnectingOutcome, ConnectingScreen};
 pub use disconnected::{DisconnectedOutcome, DisconnectedScreen};
-pub use loading::LoadingScreen;
+pub use loading::{LoadingScreen, LoadingView};
 pub use mods::{
     landing_layout, mods_layout, HudEditorOutcome, HudEditorView, HudEntryView, HudPresetKind,
     HudWidgetView, ModCardView, ModValue, ModsLayout, ModsOutcome, ModsScreen, ModsView,

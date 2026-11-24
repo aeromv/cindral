@@ -224,12 +224,20 @@ impl App {
         cindral_core::profiling::new_frame();
         cindral_core::profile_scope!("redraw");
         let now = Instant::now();
+        let last_split = self.cpu.last_frame();
         self.cpu.start(now);
         let elapsed = self.clock.tick(now, self.show_overlay);
         if let Some(world) = self.world.as_mut() {
             world.note_frame(Duration::from_secs_f32(elapsed));
         }
         if self.session.is_some() {
+            let names = crate::debug::cpu_split::STAGE_NAMES;
+            if let Some(line) =
+                self.hitches
+                    .record(Duration::from_secs_f32(elapsed), now, (&names, &last_split))
+            {
+                tracing::info!("{line}");
+            }
             if let Some(line) = self.stutters.record(Duration::from_secs_f32(elapsed), now) {
                 // How evenly the ticks reached this thread: bunched ticks
                 // make the camera jump whatever the frame rate.

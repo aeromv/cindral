@@ -12,6 +12,7 @@ pub(crate) mod entity_icons;
 pub mod game_files;
 pub(crate) mod item_icons;
 pub(crate) mod item_tints;
+pub(crate) mod load_progress;
 pub mod models;
 pub(crate) mod official;
 pub(crate) mod panorama;

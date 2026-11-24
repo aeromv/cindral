@@ -11,9 +11,8 @@ use std::time::Instant;
 use cindral_assets::PackFiles;
 use cindral_core::lang::Lang;
 use cindral_game::chat::{ChatInput, SentHistory};
-use cindral_render::{Camera, HudState, Overlay, Renderer};
+use cindral_render::{Camera, HudState, Overlay, Renderer, SkyImage, SkyTextures};
 use cindral_ui::game_menu::GameMenu;
-use cindral_ui::menus::PanoramaTextures;
 use cindral_ui::{debug_screen::DebugScreen, FontAtlas, Rect, Ui};
 
 use super::server_pack_control;
@@ -39,9 +38,10 @@ use crate::resources::custom_guis::CustomGuis;
 use crate::resources::custom_items::CustomItems;
 use crate::resources::entity_icons::EntityIcons;
 use crate::resources::game_files::{load_packs, GameFiles, PackFeatures};
+use crate::resources::load_progress::{LoadProgress, Splash, Step};
 use crate::resources::panorama::load_panorama_faces;
 use crate::resources::sky::{load_border_texture, load_sky_textures, CustomSky};
-use crate::resources::terrain::TerrainTextures;
+use crate::resources::terrain::{InstalledTerrain, TerrainTextures};
 use crate::resources::texture_animator::TextureAnimator;
 use crate::resources::theme_font::FontChoice;
 use crate::resources::ui_font::{self, LoadedFont};
@@ -64,6 +64,52 @@ pub(super) struct AsyncLoadedAssets {
     pub(super) terrain: TerrainTextures,
     pub(super) files: GameFiles,
     pub(super) custom_animations: Vec<CustomAnimation>,
+    pub(super) pictures: DecodedPictures,
+}
+
+/// What is left to upload, one stage per frame.
+pub(in crate::window) enum PendingUpload {
+    /// Decoded; nothing is on the graphics card yet.
+    Decoded(AsyncLoadedAssets),
+    /// The font and the block textures are uploaded; the rest follows.
+    Terrain {
+        terrain: InstalledTerrain,
+        rest: AfterTerrain,
+    },
+}
+
+/// The assets still to upload once the block textures are.
+pub(in crate::window) struct AfterTerrain {
+    files: GameFiles,
+    custom_animations: Vec<CustomAnimation>,
+    pictures: DecodedPictures,
+}
+
+/// The sky and title pictures, decoded on the asset thread so the window
+/// only uploads them. Decoding them on the window thread held the loading
+/// screen still for half a second on a Pentium G5400 (a pack's custom sky
+/// is several large PNGs).
+pub(super) struct DecodedPictures {
+    sky: SkyTextures,
+    border: Option<SkyImage>,
+    custom_sky: CustomSky,
+    custom_sky_images: Vec<SkyImage>,
+    panorama: Option<[SkyImage; 6]>,
+}
+
+impl DecodedPictures {
+    /// Decodes every picture from `files` and the verified jar.
+    pub(super) fn load(files: &GameFiles) -> Self {
+        let (custom_sky, custom_sky_images) = CustomSky::load(files);
+        let jar = crate::resources::official::find_verified_jar().ok();
+        Self {
+            sky: load_sky_textures(files),
+            border: load_border_texture(files),
+            custom_sky,
+            custom_sky_images,
+            panorama: load_panorama_faces(jar.as_ref()),
+        }
+    }
 }
 
 /// Reads the packs at `paths` once and builds from them both the terrain
@@ -72,8 +118,11 @@ pub(super) struct AsyncLoadedAssets {
 pub(super) fn load_packs_and_terrain(
     paths: &[PathBuf],
     features: PackFeatures,
+    progress: &LoadProgress,
 ) -> (TerrainTextures, GameFiles, Vec<CustomAnimation>) {
+    progress.set(Step::Packs);
     let mut packs = load_packs(paths);
+    progress.set(Step::Models);
     let pack_files = PackFiles::from_pack_refs(&packs);
     // The pictures of the custom container screens ride in a synthetic pack on
     // top, so the GUI atlas holds them as regions.
@@ -86,6 +135,7 @@ pub(super) fn load_packs_and_terrain(
     if let Some(resources) = terrain.items() {
         resources.set_custom_items(Arc::new(items));
     }
+    progress.set(Step::Files);
     let jar = crate::resources::official::find_verified_jar().ok();
     let files = GameFiles::new(pack_files, jar)
         .with_features(features)
@@ -158,13 +208,6 @@ pub(super) fn upload_custom_sky(renderer: &mut Renderer, files: &GameFiles) -> C
     sky
 }
 
-/// Uploads the six title panorama faces of the verified jar; `None` keeps the
-/// dirt background (no jar, or a face that does not decode).
-pub(super) fn upload_panorama(renderer: &mut Renderer) -> Option<PanoramaTextures> {
-    let jar = crate::resources::official::find_verified_jar().ok();
-    renderer.upload_panorama(&load_panorama_faces(jar.as_ref())?)
-}
-
 /// Uploads the enchantment glint texture to the renderer, if available.
 pub(super) fn upload_glint_texture(
     renderer: &mut Renderer,
@@ -213,16 +256,22 @@ impl App {
         // The pack loader reads options that shape the loaded resources.
         crate::meshing::settings::store(&options.video);
         let (asset_tx, asset_rx) = std::sync::mpsc::channel();
+        let progress = LoadProgress::default();
+        let loader_progress = progress.clone();
         let loader_thread = std::thread::Builder::new()
             .name("AssetLoader".to_string())
             .spawn(move || {
-                let (terrain, files, custom_animations) = load_packs_and_terrain(&packs, features);
+                let (terrain, files, custom_animations) =
+                    load_packs_and_terrain(&packs, features, &loader_progress);
+                loader_progress.set(Step::Font);
                 let font = ui_font::load_with(&files);
+                let pictures = DecodedPictures::load(&files);
                 let _ = asset_tx.send(AsyncLoadedAssets {
                     font,
                     terrain,
                     files,
                     custom_animations,
+                    pictures,
                 });
             });
         if let Err(error) = loader_thread {
@@ -261,7 +310,9 @@ impl App {
             discord: crate::discord::Presence::spawn(),
             first_run,
             window_shown: false,
+            splash: Splash::new(progress),
             stutters: crate::debug::stutter::StutterLog::new(std::time::Instant::now()),
+            hitches: crate::debug::stutter::HitchLog::default(),
             lang,
             mods: ModsRuntime::new(&options.mods),
             mods_memory: (0, None),
@@ -303,6 +354,7 @@ impl App {
             assets: Assets {
                 font,
                 receiver: Some(asset_rx),
+                pending: None,
                 files: GameFiles::default(),
                 leaf_layers: Vec::new(),
                 ui_atlas: None,
@@ -370,8 +422,26 @@ impl App {
     }
 
     /// Checks if the background worker has finished decoding assets.
+    ///
+    /// Nothing is applied before the loading screen is on the screen: on a
+    /// fast disk the assets are ready before the first frame, and applying
+    /// them then went straight to the title screen behind a hidden window.
+    /// Once they arrive, one frame shows the upload step, then the upload
+    /// (which holds the window for a moment) runs and the screen fades out.
     pub(super) fn poll_asset_loading(&mut self) {
-        if self.renderer.is_none() {
+        if self.renderer.is_none() || !self.window_shown {
+            return;
+        }
+        let now = Instant::now();
+        if self.splash.shown_at.is_none() {
+            self.splash.shown_at = Some(now);
+        }
+        if let Some(pending) = self.assets.pending.take() {
+            self.assets.pending = if self.splash.may_leave(now) {
+                self.upload_stage(pending)
+            } else {
+                Some(pending)
+            };
             return;
         }
         let Some(rx) = self.assets.receiver.as_ref() else {
@@ -380,7 +450,8 @@ impl App {
         match rx.try_recv() {
             Ok(assets) => {
                 self.assets.receiver = None;
-                self.apply_loaded_assets(assets);
+                self.splash.progress.set(Step::Upload);
+                self.assets.pending = Some(PendingUpload::Decoded(assets));
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -388,16 +459,31 @@ impl App {
                 self.assets.receiver = None;
                 if self.screen == Screen::Loading {
                     self.screen = Screen::Title;
+                    self.splash.fade_from = Some(Instant::now());
                 }
             }
         }
     }
 
-    /// Finalizes asset loading on the GPU and transitions from the loading screen.
-    fn apply_loaded_assets(&mut self, assets: AsyncLoadedAssets) {
-        let Some(renderer) = self.renderer.as_mut() else {
-            return;
-        };
+    /// Uploads one stage of `pending` and returns what is left.
+    fn upload_stage(&mut self, pending: PendingUpload) -> Option<PendingUpload> {
+        match pending {
+            PendingUpload::Decoded(assets) => {
+                let staged = self.upload_terrain(assets);
+                self.splash.progress.set(Step::World);
+                staged
+            }
+            PendingUpload::Terrain { terrain, rest } => {
+                self.finish_upload(&terrain, rest);
+                None
+            }
+        }
+    }
+
+    /// The first upload stage: the game font and the block textures, the
+    /// largest part (mipmaps of a thousand layers).
+    fn upload_terrain(&mut self, assets: AsyncLoadedAssets) -> Option<PendingUpload> {
+        let renderer = self.renderer.as_mut()?;
 
         self.assets.font = assets.font;
         match ui_font::install(renderer, &self.assets.font.atlas) {
@@ -412,32 +498,56 @@ impl App {
                 tracing::warn!(%error, "failed to install official font atlas; keeping fallback");
             }
         }
-        self.assets.brand_atlas = ui_font::install_brand(renderer);
+        // The brand font was installed with the renderer and does not depend
+        // on the packs: rasterizing it again here only held the window.
 
         renderer.set_mipmap_levels(u32::from(self.options.video.mipmap_levels));
         let terrain = assets.terrain.install(renderer);
+        Some(PendingUpload::Terrain {
+            terrain,
+            rest: AfterTerrain {
+                files: assets.files,
+                custom_animations: assets.custom_animations,
+                pictures: assets.pictures,
+            },
+        })
+    }
 
+    /// The second upload stage: the menus, the sky, the entities and the
+    /// world view; then the loading screen fades into the title screen.
+    fn finish_upload(&mut self, terrain: &InstalledTerrain, assets: AfterTerrain) {
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
         let gui_atlas = crate::resources::official::grow_atlas(terrain.gui_atlas(), &[]);
         upload_gui_atlas(renderer, Some(&gui_atlas));
         upload_glint_texture(renderer, terrain.glint_texture());
         self.assets.files = assets.files;
-        upload_sky_textures(renderer, &self.assets.files);
-        self.assets.custom_sky = upload_custom_sky(renderer, &self.assets.files);
+        let pictures = assets.pictures;
+        renderer.set_sky_textures(&pictures.sky);
+        if let Some(border) = &pictures.border {
+            renderer.set_border_texture(border);
+        }
+        renderer.set_custom_sky_textures(&pictures.custom_sky_images);
+        self.assets.custom_sky = pictures.custom_sky;
         self.assets.world_colors =
             crate::resources::custom_colors::WorldColors::upload(renderer, &self.assets.files);
-        self.panorama = upload_panorama(renderer);
+        self.panorama = pictures
+            .panorama
+            .as_ref()
+            .and_then(|faces| renderer.upload_panorama(faces));
         self.assets.gui_atlas = Some(gui_atlas);
         self.server_icons_revision = u64::MAX;
         self.assets.items = terrain.items();
         self.dials = DialAnimator::new(terrain.dials());
         self.assets.leaf_layers = terrain.leaf_layers();
         self.assets.texture_animator = TextureAnimator::for_terrain(
-            &terrain,
+            terrain,
             super::options_control::animation_filter(&self.options.video.animations),
         )
         .with_custom(assets.custom_animations);
 
-        match WorldView::new(&terrain, worker_count(self.options.video.mesh_threads)) {
+        match WorldView::new(terrain, worker_count(self.options.video.mesh_threads)) {
             Ok(world) => self.world = Some(world),
             Err(error) => {
                 tracing::error!(%error, "WorldView::new failed");
@@ -451,7 +561,9 @@ impl App {
         ));
         self.assets.map_textures = Some(MapTextures::load(renderer, &self.assets.files));
 
+        self.splash.progress.set(Step::Done);
         if self.screen == Screen::Loading {
+            self.splash.fade_from = Some(Instant::now());
             if self.args.server().is_some() {
                 self.connect_from_arguments();
             } else {

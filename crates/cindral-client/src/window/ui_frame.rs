@@ -29,6 +29,9 @@ use crate::screens::text::Done;
 use crate::screens::Screen;
 use crate::world_view::WorldView;
 
+/// The corner line of the loading screen.
+const LOADING_VERSION: &str = concat!("Cindral ", env!("CARGO_PKG_VERSION"));
+
 /// The `HAT` bit of the skin parts (`EnumPlayerModelParts.HAT`).
 const HAT_PART: u8 = 0x40;
 
@@ -384,6 +387,19 @@ impl App {
                 );
                 let inventory_key = self.options.keys.get(Action::Inventory).label(&self.lang);
                 let version_line = self.version_line();
+                let now = std::time::Instant::now();
+                let loading_fraction = self.splash.advance(now);
+                let loading_opacity = if screen == Screen::Loading {
+                    Some(1.0)
+                } else {
+                    self.splash.fade(now)
+                };
+                let loading = loading_opacity.map(|opacity| cindral_ui::menus::LoadingView {
+                    fraction: loading_fraction,
+                    step: self.splash.progress.step().label(),
+                    version: LOADING_VERSION,
+                    opacity,
+                });
                 let context = MenuContext {
                     stats_revision: self.world.as_ref().map_or(0, WorldView::stats_revision),
                     stats_loading: self.world.as_ref().is_some_and(WorldView::stats_loading),
@@ -400,6 +416,7 @@ impl App {
                     title_style: self.title_style(),
                     brand_font: self.assets.brand_atlas.as_ref().unwrap_or(atlas),
                     mods: &mods_view,
+                    loading,
                 };
                 let shown = self
                     .menu

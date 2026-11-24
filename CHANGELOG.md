@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.8.0 — 24 November 2026
+
+### Loading screen
+- The loading screen always shows now. The game files often finished
+  loading before the window's first frame; the game then went straight to
+  the title screen while the window was still hidden, so the player saw
+  nothing for a few seconds and then the menu.
+- New design: the logo, a bar that follows the real loading steps (resource
+  packs, block models, textures, font, upload), the name of the step and a
+  percentage. It fades into the title screen.
+
+### Faster end of loading
+- The sky, custom sky and title pictures are decoded on the loading thread;
+  the window only uploads them. A pack's custom sky is several large PNGs,
+  and decoding them on the window thread froze it for half a second on a
+  Pentium G5400.
+- The brand font was rasterized a second time when the game files arrived;
+  once is enough.
+- The upload is done in two frames (block textures, then the rest), so the
+  bar moves during it instead of stopping.
+
+### Finding hitches
+- A frame that takes over 100 ms in a game now writes its own line in
+  `logs/latest.log`: how long it took and which part of the frame took the
+  time (world, HUD, scene, render, or outside the drawing). The minute
+  summary only said that hitches happened.
+
+### README
+- Rewritten in plain words: what Cindral is, how to install it, what is
+  better than Java in PvP and what stays the same on purpose.
+
 ## 0.7.0 — 24 November 2026
 
 ### PvP: every click counts

@@ -15,7 +15,7 @@ use crate::resources::ui_font::LoadedFont;
 use crate::scene::entity::EntityTextures;
 use crate::scene::item_world::ItemLayers;
 use crate::scene::map::MapTextures;
-use crate::window::startup::AsyncLoadedAssets;
+use crate::window::startup::{AsyncLoadedAssets, PendingUpload};
 
 /// The fonts, atlases and textures loaded for the session.
 pub(in crate::window) struct Assets {
@@ -28,6 +28,9 @@ pub(in crate::window) struct Assets {
     pub(in crate::window) leaf_layers: Vec<u32>,
     /// Background asset loader channel receiver.
     pub(in crate::window) receiver: Option<std::sync::mpsc::Receiver<AsyncLoadedAssets>>,
+    /// Assets that arrived and are uploaded one stage per frame, so the
+    /// loading screen shows each step before it holds the window.
+    pub(in crate::window) pending: Option<PendingUpload>,
     /// The atlas the renderer accepted; the UI metrics must match it.
     pub(in crate::window) ui_atlas: Option<Arc<FontAtlas>>,
     /// Which font `ui_atlas` was built for, so a theme or scale change swaps it.

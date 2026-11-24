@@ -407,6 +407,12 @@ fn menu_scene(
         title_style: demo_title_style(view, brand.is_some()),
         brand_font: brand.unwrap_or(atlas),
         mods: &mods,
+        loading: (view == "loading").then_some(cindral_ui::menus::LoadingView {
+            fraction: 0.62,
+            step: "Reading textures",
+            version: "Cindral",
+            opacity: 1.0,
+        }),
     };
     if let Some(tab) = match view {
         "stats-blocks" => Some(StatsTab::Blocks),

@@ -66,6 +66,13 @@ impl CpuSplit {
         }
     }
 
+    /// The stage times of the last frame, in microseconds, in the order of
+    /// [`STAGE_NAMES`]; read before [`CpuSplit::start`] begins the next one.
+    #[must_use]
+    pub fn last_frame(&self) -> [f32; 4] {
+        self.frame
+    }
+
     /// The smoothed times for the F3 screen, `None` before the first frame.
     #[must_use]
     pub fn reading(&self) -> Option<CpuReading> {

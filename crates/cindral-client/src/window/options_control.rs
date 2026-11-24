@@ -277,6 +277,7 @@ impl App {
                 self.server_pack.active_path(),
             ),
             PackFeatures::from_quality(&self.options.video.quality),
+            &crate::resources::load_progress::LoadProgress::default(),
         );
         self.assets.files = files;
         let Some(renderer) = self.renderer.as_mut() else {

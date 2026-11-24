@@ -22,9 +22,9 @@ use cindral_core::lang::Lang;
 use cindral_ui::menus::{
     AchievementsData, AchievementsOutcome, AchievementsScreen, ConfirmOutcome, ConfirmScreen,
     ConnectStage, ConnectingOutcome, ConnectingScreen, DisconnectedOutcome, DisconnectedScreen,
-    LoadingScreen, ModsOutcome, ModsScreen, ModsView, PanoramaTextures, PanoramaView, RowStatus,
-    ServerEditOutcome, ServerEditScreen, ServerListOutcome, ServerListScreen, ServerRow, StatsData,
-    StatsOutcome, StatsScreen, TitleInfo, TitleOutcome, TitleScreen, TitleStyle,
+    LoadingScreen, LoadingView, ModsOutcome, ModsScreen, ModsView, PanoramaTextures, PanoramaView,
+    RowStatus, ServerEditOutcome, ServerEditScreen, ServerListOutcome, ServerListScreen, ServerRow,
+    StatsData, StatsOutcome, StatsScreen, TitleInfo, TitleOutcome, TitleScreen, TitleStyle,
 };
 use cindral_ui::{FontAtlas, Ui};
 
@@ -101,6 +101,9 @@ pub struct MenuContext<'a> {
     /// The mods the mods menu lists and the HUD widgets it lets the player
     /// move; empty on every other screen.
     pub mods: &'a ModsView,
+    /// The loading screen: its progress while loading, then its fade over
+    /// the next screen; `None` once it is gone.
+    pub loading: Option<LoadingView<'a>>,
 }
 
 /// The result of one menu frame.
@@ -291,7 +294,13 @@ impl MenuFlow {
         let command = match screen {
             Screen::Title => self.show_title(ui, atlas, lang, context, &mut panorama),
             Screen::Loading => {
-                LoadingScreen::new().show(ui, context.brand_font, lang);
+                let view = context.loading.unwrap_or(LoadingView {
+                    fraction: 0.0,
+                    step: "",
+                    version: context.version,
+                    opacity: 1.0,
+                });
+                LoadingScreen::new().show(ui, context.brand_font, &view);
                 None
             }
             Screen::ServerList => self.show_list(ui, atlas, lang),
@@ -305,6 +314,10 @@ impl MenuFlow {
             Screen::Mods => self.show_mods(ui, (atlas, lang), context),
             _ => None,
         };
+        // The loading screen fading out over the first screen after it.
+        if let (false, Some(view)) = (screen == Screen::Loading, context.loading) {
+            LoadingScreen::new().show(ui, context.brand_font, &view);
+        }
         MenuFrame { command, panorama }
     }
 

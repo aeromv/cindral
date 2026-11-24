@@ -154,8 +154,12 @@ struct App {
     audio: AudioBridge,
     /// Whether the window was made visible (after its first frame).
     window_shown: bool,
+    /// The loading screen's progress and its fade into the title screen.
+    splash: crate::resources::load_progress::Splash,
     /// The frame times of the minute, summed up in the log.
     stutters: crate::debug::stutter::StutterLog,
+    /// One line per frame over 100 ms, with the stage that took the time.
+    hitches: crate::debug::stutter::HitchLog,
     /// The download of the game files on the first launch, while it runs.
     first_run: Option<crate::first_run::FirstRun>,
     window: Option<Arc<Window>>,
