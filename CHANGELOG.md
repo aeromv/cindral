@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.9.1 — 25 November 2026
+
+### The world no longer stays empty after joining
+- Since 0.6.1 the chunk meshing workers ran below normal priority, so that
+  they would not delay the ticks. Below normal, they also waited behind
+  every other busy program on the PC: with a video wallpaper or a browser
+  using the CPU, the world stayed empty for about ten seconds after a join
+  on a two-core CPU. They are back at normal priority; the game and network
+  threads stay above normal, which keeps the ticks on time on its own. With
+  every CPU thread busy, the chunks around the player now show after
+  1.4 s instead of 10.2 s, and the whole view after 4.6 s instead of 110 s.
+
+### Camera
+- In the first person the camera sits 0.1 block behind the eye, as in
+  1.8.9 (`EntityRenderer.orientCamera`). It sat on the eye, so players and
+  blocks close by looked slightly bigger than in 1.8.9.
+- Under water the view narrows to 60/70 of the FOV, the hand included, as
+  in 1.8.9.
+
+### Entities
+- Armour stands are drawn, with their pose, arms, base plate, worn armour,
+  held item and head. Lobbies use them for displays and NPCs.
+- The arrows stuck in your own body show in the third person and in the
+  inventory portrait.
+- The end portal surface and the beacon beam are drawn again.
+- Picking up an item plays its pop, and the ender dragon beats its wings.
+
 ## 0.9.0 — 24 November 2026
 
 ### Fewer setbacks, steadier ping

@@ -156,12 +156,27 @@ impl EntityRecord {
                 let swinging = self.animation.is_swinging();
                 self.body_yaw.update_player(moved, self.yaw, swinging);
             }
+            // `EntityArmorStand.func_110146_f`: the body is the facing.
+            EntityKind::ArmorStand => self.body_yaw.face(self.yaw),
             kind if kind.is_living() => {
                 self.body_yaw
                     .update_mob(moved, self.yaw, &mut self.head_yaw);
             }
             _ => {}
         }
+    }
+}
+
+impl EntityRecord {
+    /// Whether this is an audible ender dragon that beat its wings in the
+    /// tick that just ran (`EntityDragon.onLivingUpdate`: not `isSilent`).
+    pub(super) fn beat_wings(&self) -> bool {
+        let alive = self.health.is_none_or(|health| health > 0.0);
+        !self.meta.silent
+            && self
+                .flight
+                .as_ref()
+                .is_some_and(|flight| flight.beat_this_tick(alive))
     }
 }
 

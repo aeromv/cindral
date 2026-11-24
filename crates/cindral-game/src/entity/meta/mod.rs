@@ -34,6 +34,8 @@ pub struct EntityMeta {
     pub custom_name: Option<Arc<str>>,
     /// Whether the custom name shows without looking at the entity (entry 3).
     pub custom_name_visible: bool,
+    /// Whether the entity makes no sound of its own (entry 4, `isSilent`).
+    pub silent: bool,
     /// Health, potion colour, arrows in the body, absorption.
     pub living: LivingMeta,
     /// A child of an ageable mob or a baby zombie.
@@ -207,6 +209,11 @@ impl EntityMeta {
             if let Some(child) = zombie.child {
                 self.baby = child;
             }
+        }
+        // `EntityArmorStand.isChild` is `isSmall`: a small stand is drawn
+        // with the proportions of a child, armour and held item included.
+        if let Variant::ArmorStand(stand) = &self.variant {
+            self.baby = stand.small();
         }
     }
 

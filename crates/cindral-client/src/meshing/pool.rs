@@ -129,9 +129,10 @@ impl MeshPool {
             let pool_counters = Arc::clone(&counters);
             let builder = std::thread::Builder::new().name(format!("cindral-mesh-{index}"));
             match builder.spawn(move || {
-                // Meshing can wait a few milliseconds; the ticks and the
-                // frames cannot (`thread_priority`).
-                crate::thread_priority::set_current(crate::thread_priority::Priority::BelowNormal);
+                // Normal priority on purpose (`thread_priority`): below
+                // normal, any busy program (a video wallpaper, a browser)
+                // starved the workers and the world stayed empty for seconds
+                // after a join on a two-core CPU.
                 worker_loop(&receiver, &results, &mesher, &pool_counters);
             }) {
                 Ok(handle) => workers.push(handle),
