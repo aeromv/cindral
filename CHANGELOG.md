@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.1 — 24 November 2026
+
+### Smoother play on small CPUs
+- The game thread (ticks) and the network thread run at above-normal
+  priority, the chunk meshing workers below normal. On a two-core,
+  four-thread CPU (a Pentium G5400) the busy threads outnumber the CPU's
+  slots while chunks load; Windows shared them evenly, so ticks and packets
+  waited behind mesh jobs, arrived in bunches and the camera jumped: a high
+  frame rate that felt like 30.
+- On four threads or fewer, two meshing workers instead of three, so the
+  render, game and network threads keep room.
+- The minute summary in `logs/latest.log` adds how evenly the ticks reach
+  the render thread (P50/P95/P99 interval, repeated and collapsed ticks).
+
 ## 0.6.0 — 24 November 2026
 
 ### Display

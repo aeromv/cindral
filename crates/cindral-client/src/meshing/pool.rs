@@ -128,7 +128,12 @@ impl MeshPool {
             let mesher = terrain.mesher();
             let pool_counters = Arc::clone(&counters);
             let builder = std::thread::Builder::new().name(format!("cindral-mesh-{index}"));
-            match builder.spawn(move || worker_loop(&receiver, &results, &mesher, &pool_counters)) {
+            match builder.spawn(move || {
+                // Meshing can wait a few milliseconds; the ticks and the
+                // frames cannot (`thread_priority`).
+                crate::thread_priority::set_current(crate::thread_priority::Priority::BelowNormal);
+                worker_loop(&receiver, &results, &mesher, &pool_counters);
+            }) {
                 Ok(handle) => workers.push(handle),
                 Err(error) => {
                     drop(job_sender);
@@ -269,9 +274,12 @@ pub fn worker_count(setting: u8) -> usize {
         .unwrap_or(1)
 }
 
-/// The automatic worker count for a machine of `cores` threads.
+/// The automatic worker count for a machine of `cores` threads: all but one,
+/// except on four threads or fewer, where the render, game and network
+/// threads need two of them (a Pentium G5400 has four: two workers).
 fn automatic_workers(cores: usize) -> usize {
-    cores.saturating_sub(1).clamp(1, MAX_AUTOMATIC_WORKERS)
+    let spare = if cores <= 4 { 2 } else { 1 };
+    cores.saturating_sub(spare).clamp(1, MAX_AUTOMATIC_WORKERS)
 }
 
 /// [`worker_count`] with the automatic choice.
@@ -319,7 +327,7 @@ mod tests {
     fn the_automatic_count_leaves_a_core_and_stops_at_eight() {
         assert_eq!(automatic_workers(1), 1);
         assert_eq!(automatic_workers(2), 1);
-        assert_eq!(automatic_workers(4), 3);
+        assert_eq!(automatic_workers(4), 2);
         assert_eq!(automatic_workers(8), 7);
         assert_eq!(automatic_workers(16), MAX_AUTOMATIC_WORKERS);
         assert_eq!(automatic_workers(64), MAX_AUTOMATIC_WORKERS);

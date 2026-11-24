@@ -231,7 +231,14 @@ impl App {
         }
         if self.session.is_some() {
             if let Some(line) = self.stutters.record(Duration::from_secs_f32(elapsed), now) {
-                tracing::info!("{line}");
+                // How evenly the ticks reached this thread: bunched ticks
+                // make the camera jump whatever the frame rate.
+                let ticks = self
+                    .world
+                    .as_ref()
+                    .map(|world| world.snapshot_pacing_stats().f3_line())
+                    .unwrap_or_default();
+                tracing::info!("{line}; {ticks}");
             }
         }
         // Phase E.9: the game thread takes network events once per frame.

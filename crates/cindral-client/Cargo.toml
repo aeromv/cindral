@@ -54,6 +54,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_Media",
     "Win32_System_SystemInformation",
     "Win32_System_Console",
+    "Win32_System_Threading",
 ] }
 
 [target.'cfg(windows)'.build-dependencies]
