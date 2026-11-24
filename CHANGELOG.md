@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.2 — 24 November 2026
+
+- Only the game writes `logs/latest.log`. Benchmarks, demos and the
+  installer's asset check replaced it before, losing the session a player
+  wanted to send.
+- The last five game sessions are kept: `latest.log`, `previous.log`, then
+  `previous-2.log` to `previous-4.log`.
+
 ## 0.6.1 — 24 November 2026
 
 ### Smoother play on small CPUs

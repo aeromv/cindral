@@ -24,7 +24,6 @@ static ALLOCATOR: cindral_core::profiling::CountingAllocator =
 
 fn main() -> ExitCode {
     attach_parent_console();
-    init_logging();
 
     // Kept alive for the whole run: dropping it stops the puffin stream.
     let _profiler = cindral_core::profiling::serve();
@@ -46,6 +45,10 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // Only the game writes the log file: a benchmark, a demo or the
+    // installer's asset check would replace the session a player wants to
+    // send.
+    init_logging(matches!(args.mode(), Mode::Windowed));
 
     if args.profile {
         cindral_core::profiling::set_enabled(true);
@@ -95,21 +98,24 @@ fn attach_parent_console() {
 #[cfg(not(windows))]
 fn attach_parent_console() {}
 
-/// The log goes to the terminal (warnings, or `RUST_LOG`) and to
-/// `logs/latest.log` in the data folder (information too: setbacks, the
-/// frame summary, what was loaded), the previous run kept as
-/// `previous.log`. A release build has no console, so the file is what a
-/// player can send when something goes wrong.
-fn init_logging() {
+/// The log goes to the terminal (warnings, or `RUST_LOG`) and, for the
+/// game (`to_file`), to `logs/latest.log` in the data folder: information
+/// too (setbacks, the frame summary, what was loaded). The four sessions
+/// before it are kept as `previous.log`, `previous-2.log` .. `previous-4.log`.
+/// A release build has no console, so the file is what a player can send
+/// when something goes wrong.
+fn init_logging(to_file: bool) {
     let terminal = tracing_subscriber::fmt::layer()
         .with_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")));
-    let file = cindral_assets::cache::data_dir().and_then(|dir| {
-        let folder = dir.join("logs");
-        std::fs::create_dir_all(&folder).ok()?;
-        let latest = folder.join("latest.log");
-        let _ = std::fs::rename(&latest, folder.join("previous.log"));
-        std::fs::File::create(latest).ok()
-    });
+    let file = to_file
+        .then(cindral_assets::cache::data_dir)
+        .flatten()
+        .and_then(|dir| {
+            let folder = dir.join("logs");
+            std::fs::create_dir_all(&folder).ok()?;
+            rotate_logs(&folder);
+            std::fs::File::create(folder.join("latest.log")).ok()
+        });
     let file = file.map(|file| {
         tracing_subscriber::fmt::layer()
             .with_ansi(false)
@@ -122,4 +128,22 @@ fn init_logging() {
         .with(terminal)
         .with(file)
         .init();
+}
+
+/// Shifts the kept sessions by one: `previous-3` becomes `previous-4`, ..,
+/// `previous` becomes `previous-2` and `latest` becomes `previous`; the
+/// oldest is dropped.
+fn rotate_logs(folder: &std::path::Path) {
+    const KEPT: u32 = 4;
+    let name = |index: u32| match index {
+        0 => "latest.log".to_owned(),
+        1 => "previous.log".to_owned(),
+        n => format!("previous-{n}.log"),
+    };
+    for index in (0..KEPT).rev() {
+        let from = folder.join(name(index));
+        if from.exists() {
+            let _ = std::fs::rename(&from, folder.join(name(index + 1)));
+        }
+    }
 }
