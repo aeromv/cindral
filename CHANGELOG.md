@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.0 — 24 November 2026
+
+### PvP: every click counts
+- Two clicks inside one 50 ms tick are two attacks, as in 1.8 (its mouse
+  event loop runs `clickMouse` for each press). Cindral kept one flag per
+  tick and merged them, so a fast clicker lost hits: at 12 to 20 CPS two
+  clicks often share a tick. A miss still blocks the clicks after it in the
+  same tick, as vanilla's `leftClickCounter` does.
+- The crosshair ray already uses the look of the moment, not one blended
+  with the previous tick (the 1.8 delay that the MouseDelayFix mod
+  removes).
+- Attacks still leave at the start of a tick, as Java sends them: sending
+  them earlier, between ticks, is what anticheats flag as a hacked client.
+
 ## 0.6.2 — 24 November 2026
 
 - Only the game writes `logs/latest.log`. Benchmarks, demos and the

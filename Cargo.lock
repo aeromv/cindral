@@ -634,7 +634,7 @@ dependencies = [
 
 [[package]]
 name = "cindral-assets"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "cindral-model",
  "criterion",
@@ -651,7 +651,7 @@ dependencies = [
 
 [[package]]
 name = "cindral-audio"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "cpal",
  "criterion",
@@ -664,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "cindral-auth"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "keyring",
  "md-5",
@@ -679,7 +679,7 @@ dependencies = [
 
 [[package]]
 name = "cindral-builtin-mods"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -688,7 +688,7 @@ dependencies = [
 
 [[package]]
 name = "cindral-client"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "arboard",
  "base64 0.23.1",
@@ -730,7 +730,7 @@ dependencies = [
 
 [[package]]
 name = "cindral-core"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "puffin",
  "puffin_http",
@@ -742,7 +742,7 @@ dependencies = [
 
 [[package]]
 name = "cindral-game"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "cindral-core",
  "cindral-protocol",
@@ -755,7 +755,7 @@ dependencies = [
 
 [[package]]
 name = "cindral-mesh"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "bytemuck",
  "cindral-model",
@@ -768,7 +768,7 @@ dependencies = [
 
 [[package]]
 name = "cindral-model"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "cindral-packext",
  "cindral-world",
@@ -779,7 +779,7 @@ dependencies = [
 
 [[package]]
 name = "cindral-net"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "cindral-auth",
  "cindral-protocol",
@@ -793,7 +793,7 @@ dependencies = [
 
 [[package]]
 name = "cindral-packext"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "criterion",
  "proptest",
@@ -805,7 +805,7 @@ dependencies = [
 
 [[package]]
 name = "cindral-protocol"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "aes",
  "criterion",
@@ -820,7 +820,7 @@ dependencies = [
 
 [[package]]
 name = "cindral-render"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "bytemuck",
  "cindral-core",
@@ -840,7 +840,7 @@ dependencies = [
 
 [[package]]
 name = "cindral-testkit"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "cindral-auth",
  "cindral-game",
@@ -858,7 +858,7 @@ dependencies = [
 
 [[package]]
 name = "cindral-ui"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "cindral-core",
  "fontdue",
@@ -868,7 +868,7 @@ dependencies = [
 
 [[package]]
 name = "cindral-world"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "cindral-protocol",
  "criterion",

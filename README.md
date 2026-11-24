@@ -27,7 +27,7 @@ client does.
 Measured on a Pentium Gold G5400 with Intel UHD 610 graphics, the kind of PC
 most clients are not tested on, with a 32x PvP pack enabled:
 
-| | Cindral 0.6 |
+| | Cindral 0.7 |
 |---|---|
 | Window on screen (loading screen) | 0.15 s |
 | Textures and resource pack ready | 1.0 to 1.5 s |
