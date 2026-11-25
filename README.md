@@ -59,17 +59,24 @@ You can change them later in **Options → Video Settings**.
 
 ## PvP
 
-Things that work better than in Java 1.8.9:
+Hits are decided by the server: it checks your reach and your aim, and it
+gives the damage and the knockback. A client only decides when the attack
+packet leaves and which player it names. Cindral does that part like Java
+1.8.9, with two differences the server cannot tell apart from a normal
+player:
 
-- **No lost clicks.** Every click is a hit, even two clicks inside the same
-  game tick (that happens a lot at 12+ CPS).
-- **Your hit goes where you're aiming.** Java 1.8.9 aims the hit a little
-  behind your mouse (the bug the MouseDelayFix mod fixes). Cindral uses your
-  aim at that moment.
+- **Your hit goes where you're aiming.** Java 1.8.9 aims the hit at where
+  the mouse was a tick earlier (the bug the MouseDelayFix mod fixes).
+  Cindral uses your aim at that moment.
 - **Loading chunks doesn't delay your hits.** The game, the network and the
   drawing each run on their own thread, and the game and network threads
   get the CPU first, so a busy frame doesn't hold back your clicks or the
   packets.
+
+Every click is an attack, even two clicks inside the same game tick, as in
+Java. Clicking faster than that does not hit harder: for half a second
+after a hit, the server gives no knockback and only the extra damage of a
+stronger hit.
 
 Things that are **the same as Java on purpose**: knockback, sprinting,
 W-tap, S-tap, block-hitting, the 0.5 second wait after you miss a swing,

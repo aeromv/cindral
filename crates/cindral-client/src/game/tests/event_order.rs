@@ -446,3 +446,38 @@ fn a_late_pass_still_takes_the_own_knockback_before_the_tick() {
     assert!(must_precede_tick(&velocity(7), 7));
     assert!(!must_precede_tick(&velocity(8), 7));
 }
+
+#[test]
+fn a_screen_action_between_ticks_goes_out_before_the_next_movement() {
+    // GrimAC `Post`: 1.8 handles the screens inside `runTick`, so a
+    // `Click Window` (or any packet of a screen) never follows the
+    // movement packet of its tick.
+    let mut game = placed_game();
+    game.playing = true;
+    let mut queue = CommandQueue::default();
+    let (frames, _frames_rx) = mpsc::sync_channel(64);
+    let (chunks, _chunks_rx) = mpsc::sync_channel(64);
+    tick(&mut game, &mut queue, &frames, &chunks, Instant::now());
+    queue.ordered.clear();
+
+    super::super::game_loop::dispatch(
+        &mut game,
+        GameEvent::Chat("hello".to_string()),
+        &mut queue,
+        &frames,
+    );
+    assert!(queue.ordered.is_empty(), "nothing leaves between the ticks");
+
+    tick(&mut game, &mut queue, &frames, &chunks, Instant::now());
+    let chat = queue
+        .ordered
+        .iter()
+        .position(|command| matches!(command, ClientCommand::Chat { .. }))
+        .expect("the chat line left with the tick");
+    let movement = queue
+        .ordered
+        .iter()
+        .position(crate::game::commands::is_movement)
+        .expect("the tick reported its movement");
+    assert!(chat < movement, "{:?}", queue.ordered);
+}

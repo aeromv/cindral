@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.9.3 — 25 November 2026
+
+### Anticheats
+- Clicks in an inventory, chat lines, signs, books and the respawn button
+  now leave inside the next tick, before its movement packet, as in 1.8.9
+  (`GuiScreen.handleInput` runs inside `Minecraft.runTick`). They left the
+  moment they were made, between two ticks, and GrimAC flagged the clicks
+  as `Post` ("click window"): a click after the movement packet of a tick
+  is what an inventory cheat sends.
+- The 0.9.2 knockback fix also covers a batch that stops at its size limit
+  (256 packets, on a crowded server or after a stutter): the knockback,
+  explosions and teleports that already arrived behind it still come
+  before the tick.
+
+### Hits, plainly
+- The README and the website said Cindral registers hits better than
+  1.8.9. The server decides the hits; Cindral sends each click at the time
+  1.8.9 would, using the aim of that moment. The wording now says so.
+
 ## 0.9.2 — 25 November 2026
 
 ### Smooth knockback again

@@ -113,8 +113,10 @@ pub(super) fn run(
             // cut (`must_precede_tick`): every event up to the last of them
             // is handled first, in order.
             let mut must_finish = 0_usize;
-            while events_processed < MAX_EVENTS_PER_PASS || must_finish > 0 {
-                if must_finish == 0 && events_processed > 0 && Instant::now() >= deadline {
+            loop {
+                let at_limit = events_processed >= MAX_EVENTS_PER_PASS;
+                let late = events_processed > 0 && Instant::now() >= deadline;
+                if must_finish == 0 && (at_limit || late) {
                     // Vanilla handles every packet that arrived before the
                     // tick (`Minecraft.runTick` runs the scheduled tasks
                     // first). Cutting the pass put a knockback behind the
@@ -133,7 +135,9 @@ pub(super) fn run(
                         .rposition(|event| must_precede_tick(event, game.entity_id))
                         .map_or(0, |index| index + 1);
                     if must_finish == 0 {
-                        split = true;
+                        // A pass cut by its length leaves the slot open
+                        // (below); one cut by the tick is a split.
+                        split = !at_limit;
                         break;
                     }
                 }
@@ -144,7 +148,7 @@ pub(super) fn run(
                 // Once the last of them is handled, the deadline check above
                 // decides again whether the rest waits for the tick.
                 must_finish = must_finish.saturating_sub(1);
-                if handle_event(&mut game, event, &mut queue, &frames) {
+                if dispatch(&mut game, event, &mut queue, &frames) {
                     ended = game.end.take();
                     break;
                 }
@@ -209,7 +213,7 @@ pub(super) fn run(
         if now >= next_tick {
             continue;
         }
-        if (events_processed == MAX_EVENTS_PER_PASS || split)
+        if (events_processed >= MAX_EVENTS_PER_PASS || split)
             && (!events.is_empty() || !deferred.is_empty())
         {
             continue;
@@ -238,7 +242,7 @@ pub(super) fn run(
                         deferred.push_back(event);
                     }
                     Ok(event) => {
-                        if handle_event(&mut game, event, &mut queue, &frames) {
+                        if dispatch(&mut game, event, &mut queue, &frames) {
                             ended = game.end.take();
                         }
                         if pacing {
@@ -310,6 +314,49 @@ fn take_input(game: &mut Game, update: InputUpdate, queue: &mut CommandQueue) {
     if (game.yaw, game.pitch) != before {
         publish_look(game);
     }
+}
+
+/// Whether `event` is something the player did in a screen: a click in an
+/// inventory, a chat line, a sign, a book, the respawn button.
+///
+/// The vanilla client handles the screens inside `Minecraft.runTick`
+/// (`GuiScreen.handleInput`), before the player's update sends the movement
+/// packet of the tick, so their packets always come before it. Sending a
+/// `Click Window` as soon as the click arrived put it after the movement
+/// packet; GrimAC reads a click after the movement and before the next
+/// transaction reply as a click outside the tick (`Post`, "click window").
+pub(super) fn is_screen_action(event: &GameEvent) -> bool {
+    matches!(
+        event,
+        GameEvent::Chat(_)
+            | GameEvent::TabComplete(_)
+            | GameEvent::CloseInventory
+            | GameEvent::Inventory(_)
+            | GameEvent::SignEdited { .. }
+            | GameEvent::BookEdited(_)
+            | GameEvent::Container(_)
+            | GameEvent::Creative(_)
+            | GameEvent::RequestStats
+            | GameEvent::InventoryOpened
+            | GameEvent::Respawn
+    )
+}
+
+/// Takes one message of the inbox: a screen action waits for the next tick
+/// ([`is_screen_action`]), everything else is handled now.
+///
+/// Returns `true` when the session must end.
+pub(super) fn dispatch(
+    game: &mut Game,
+    event: GameEvent,
+    queue: &mut CommandQueue,
+    frames: &SyncSender<RenderEvent>,
+) -> bool {
+    if is_screen_action(&event) {
+        game.screen_actions.push(event);
+        return false;
+    }
+    handle_event(game, event, queue, frames)
 }
 
 /// Handles one message of the inbox.

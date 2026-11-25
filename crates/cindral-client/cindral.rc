@@ -13,12 +13,12 @@ BEGIN
     BEGIN
       VALUE "CompanyName", "AeroMV"
       VALUE "FileDescription", "Cindral"
-      VALUE "FileVersion", "0.9.2"
+      VALUE "FileVersion", "0.9.3"
       VALUE "InternalName", "cindral"
       VALUE "LegalCopyright", "AeroMV and contributors. MIT or Apache-2.0."
       VALUE "OriginalFilename", "cindral.exe"
       VALUE "ProductName", "Cindral"
-      VALUE "ProductVersion", "0.9.2"
+      VALUE "ProductVersion", "0.9.3"
     END
   END
   BLOCK "VarFileInfo"
