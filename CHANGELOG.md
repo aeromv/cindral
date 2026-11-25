@@ -12,11 +12,14 @@
   that have already arrived now always come before the tick, with every
   packet before them; only what follows them (chunks, mostly) waits.
 
-### A log for every session
-- Some antivirus programs (Kaspersky's AntiCryptor) let a program they do
-  not know create files but not overwrite or rename them. The game then
-  could not replace `logs/latest.log` and the session had no log at all.
-  It now writes `logs/session-<number>.log` instead.
+### Known problem: no log, settings not saved, with Kaspersky
+- On a PC with Kaspersky Endpoint Security, the game started from its
+  shortcut writes no `logs/latest.log` and cannot overwrite its files, so
+  changed settings are not kept. Started another way, it can. When
+  `latest.log` cannot be replaced, the game now tries a new
+  `logs/session-<number>.log`, but that is blocked too in this case.
+  Adding Cindral to the antivirus's trusted programs is the workaround
+  until the cause is found.
 
 ## 0.9.1 — 25 November 2026
 
