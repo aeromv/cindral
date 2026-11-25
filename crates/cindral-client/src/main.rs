@@ -114,7 +114,9 @@ fn init_logging(to_file: bool) {
             let folder = dir.join("logs");
             std::fs::create_dir_all(&folder).ok()?;
             rotate_logs(&folder);
-            std::fs::File::create(folder.join("latest.log")).ok()
+            std::fs::File::create(folder.join("latest.log"))
+                .ok()
+                .or_else(|| new_session_log(&folder))
         });
     let file = file.map(|file| {
         tracing_subscriber::fmt::layer()
@@ -128,6 +130,21 @@ fn init_logging(to_file: bool) {
         .with(terminal)
         .with(file)
         .init();
+}
+
+/// A log file of its own for this session, `session-<seconds>.log`, when
+/// `latest.log` cannot be replaced: some antivirus programs (Kaspersky's
+/// AntiCryptor) let an unknown program create files but not rename or
+/// overwrite them, and the session then went without any log.
+fn new_session_log(folder: &std::path::Path) -> Option<std::fs::File> {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(folder.join(format!("session-{seconds}.log")))
+        .ok()
 }
 
 /// Shifts the kept sessions by one: `previous-3` becomes `previous-4`, ..,

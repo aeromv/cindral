@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.9.2 — 25 November 2026
+
+### Smooth knockback again
+- Since 0.9.0 a batch of packets that ran past the start of a tick left
+  the rest of the batch for after that tick, to keep the ticks on time. If
+  the player's knockback was in that rest, it was applied a tick late:
+  the knockback felt heavy and uneven, and the server, which had expected
+  it a tick earlier, pulled the player back to an older position. As in
+  1.8.9, the knockback, explosions, teleports and the player's own input
+  that have already arrived now always come before the tick, with every
+  packet before them; only what follows them (chunks, mostly) waits.
+
+### A log for every session
+- Some antivirus programs (Kaspersky's AntiCryptor) let a program they do
+  not know create files but not overwrite or rename them. The game then
+  could not replace `logs/latest.log` and the session had no log at all.
+  It now writes `logs/session-<number>.log` instead.
+
 ## 0.9.1 — 25 November 2026
 
 ### The world no longer stays empty after joining

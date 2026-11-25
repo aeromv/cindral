@@ -427,3 +427,22 @@ fn test_event_order_12_fifo_order_preserved() {
         );
     }
 }
+
+#[test]
+fn a_late_pass_still_takes_the_own_knockback_before_the_tick() {
+    use crate::game::game_loop::must_precede_tick;
+    let velocity = |entity_id| {
+        GameEvent::Net(PlayEvent::EntityVelocity(
+            cindral_protocol::packets::play::clientbound::EntityVelocity {
+                entity_id,
+                velocity_x: 0,
+                velocity_y: 4000,
+                velocity_z: 0,
+            },
+        ))
+    };
+    // The knockback of the local player must come before the tick; another
+    // player's may wait, as chunks do.
+    assert!(must_precede_tick(&velocity(7), 7));
+    assert!(!must_precede_tick(&velocity(8), 7));
+}
