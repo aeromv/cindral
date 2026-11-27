@@ -168,7 +168,11 @@ impl Camera {
     /// block, as `orientCamera` does) and whether it is under water.
     pub fn set_viewpoint(&mut self, first_person: bool, underwater: bool) {
         self.first_person = first_person;
-        self.medium_fov_scale = if underwater { UNDERWATER_FOV_SCALE } else { 1.0 };
+        self.medium_fov_scale = if underwater {
+            UNDERWATER_FOV_SCALE
+        } else {
+            1.0
+        };
     }
 
     /// Updates the aspect ratio (viewport width / height).

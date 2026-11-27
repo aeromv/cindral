@@ -236,7 +236,24 @@ fn apply_net_event(
         PlayEvent::PluginMessage(packet) if packet.channel == payload::TRADE_LIST => {
             apply_trade_list(game, &packet.data, frames);
         }
-        other => apply_server_state(&mut game.server, &other),
+        other => {
+            if let PlayEvent::EntityProperties(packet) = &other {
+                if packet.entity_id == game.entity_id {
+                    let present = cindral_game::movement::lists_sprint_modifier(packet);
+                    tracing::debug!(
+                        target: "tickdbg",
+                        "S20 self at t={} sprint_modifier={:?} keys={:?}",
+                        game.status_data.ticks,
+                        present,
+                        packet.properties.iter().map(|p| p.key.as_str()).collect::<Vec<_>>()
+                    );
+                    if let (Some(present), Some(state)) = (present, game.state.as_mut()) {
+                        state.set_sprint_modifier(present);
+                    }
+                }
+            }
+            apply_server_state(&mut game.server, &other);
+        }
     }
 }
 

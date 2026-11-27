@@ -37,6 +37,7 @@ pub(super) fn show_chat(game: &mut Game, json: &str, position: Position) {
 
 /// Adds a message to the chat, which the HUD shows next.
 pub(super) fn push_chat(game: &mut Game, line: ChatLineView) {
+    tracing::debug!(target: "chat", "{}", line.plain());
     game.chat.push(line);
     game.hud_dirty = true;
 }

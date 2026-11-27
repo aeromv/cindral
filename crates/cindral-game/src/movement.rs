@@ -7,9 +7,10 @@
 //! (`Potion.registerPotionAttributeModifier`, `Potion.getAttributeModifierAmount`:
 //! `amount * (amplifier + 1)`), and the server also sends them in `Entity
 //! Properties`. A modifier has a UUID, so one that arrives both ways counts
-//! once. The sprint boost is added by the movement code itself
-//! (`EntityLivingBase.setSprinting`), so the sprint modifier the server may
-//! list is left out.
+//! once. The sprint boost is applied by the movement code itself, from
+//! `physics::Player::sprint_modifier`: `EntityLivingBase.setSprinting` and
+//! the server's own list ([`lists_sprint_modifier`], MC-69459) set it, so it
+//! is left out of the speed here.
 
 use std::collections::BTreeMap;
 
@@ -65,6 +66,26 @@ impl Default for MovementStats {
             blinded: false,
         }
     }
+}
+
+/// Whether an `Entity Properties` packet lists the sprint modifier on the
+/// movement speed, or `None` when it does not carry the movement speed
+/// (`NetHandlerPlayClient.handleEntityProperties` replaces the modifiers of
+/// every listed attribute, MC-69459).
+#[must_use]
+pub fn lists_sprint_modifier(
+    packet: &cindral_protocol::packets::play::clientbound::entity_properties::EntityProperties,
+) -> Option<bool> {
+    packet
+        .properties
+        .iter()
+        .find(|property| property.key == MOVEMENT_SPEED)
+        .map(|property| {
+            property
+                .modifiers
+                .iter()
+                .any(|modifier| modifier.uuid == SPRINT_UUID)
+        })
 }
 
 /// The movement stats from the attributes and the effects of the server.

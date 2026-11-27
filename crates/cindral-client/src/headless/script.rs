@@ -48,6 +48,17 @@ pub enum ScriptStep {
     /// sprinting fight. The vanilla client attacks an entity on each press,
     /// not while the button is held.
     Strike,
+    /// [`Self::Strike`] that raises the sword for 100 ms after every click
+    /// (a block hit).
+    BlockHit,
+    /// [`Self::Strike`] that lets go of the forward key for 100 ms after
+    /// every click (a W-tap, which resets the sprint).
+    WTap,
+    /// [`Self::Strike`] while strafing left and right, 400 ms each way.
+    StrafeStrike,
+    /// Stand still and click the attack button five times a second: the
+    /// defender of an anticheat test, which the attacker runs into.
+    Click,
     /// Walk forward, jump twice a second and click the attack button five
     /// times a second: the hits that land on the way down are critical.
     JumpStrike,
@@ -213,6 +224,25 @@ impl Script {
                 update.state.forward = 1.0;
                 update.state.sprint = true;
                 break_block = self.click_due(now);
+            }
+            ScriptStep::Click => break_block = self.click_due(now),
+            ScriptStep::BlockHit | ScriptStep::WTap | ScriptStep::StrafeStrike => {
+                break_block = self.click_due(now);
+                let after_click = now.duration_since(self.last_click) < Duration::from_millis(100);
+                update.state.forward = 1.0;
+                update.state.sprint = true;
+                match phase.step {
+                    ScriptStep::BlockHit => update.state.use_item = after_click && !break_block,
+                    ScriptStep::WTap if after_click && !break_block => {
+                        update.state.forward = 0.0;
+                        update.state.sprint = false;
+                    }
+                    ScriptStep::StrafeStrike => {
+                        let half = now.duration_since(self.phase_started).as_millis() / 400;
+                        update.state.strafe = if half.is_multiple_of(2) { 1.0 } else { -1.0 };
+                    }
+                    _ => {}
+                }
             }
             ScriptStep::JumpStrike => {
                 update.state.forward = 1.0;
@@ -384,6 +414,46 @@ pub fn combat_script() -> Vec<ScriptPhase> {
         phase(Select(3), 1),
         phase(Tap, 1),
         phase(Idle, 3),
+    ]
+}
+
+/// A long PvP fight for anticheat tests: sprinting strikes with jump
+/// strikes between them, for ten minutes. Two sessions placed face to face
+/// (`/tp` with opposite yaws) keep hitting each other along one line.
+#[must_use]
+pub fn pvp_script() -> Vec<ScriptPhase> {
+    let phase = |step, seconds| ScriptPhase {
+        step,
+        duration: Duration::from_secs(seconds),
+        pitch: 0.0,
+    };
+    use ScriptStep::{BlockHit, Idle, JumpStrike, StrafeStrike, Strike, WTap};
+    let mut phases = vec![phase(Idle, 8)];
+    for _ in 0..20 {
+        phases.push(phase(Strike, 5));
+        phases.push(phase(BlockHit, 6));
+        phases.push(phase(JumpStrike, 4));
+        phases.push(phase(WTap, 6));
+        phases.push(phase(StrafeStrike, 5));
+    }
+    phases
+}
+
+/// The defender of [`pvp_script`]: stands still and clicks five times a
+/// second, for ten minutes.
+#[must_use]
+pub fn pvp_hold_script() -> Vec<ScriptPhase> {
+    vec![
+        ScriptPhase {
+            step: ScriptStep::Idle,
+            duration: Duration::from_secs(8),
+            pitch: 0.0,
+        },
+        ScriptPhase {
+            step: ScriptStep::Click,
+            duration: Duration::from_secs(600),
+            pitch: 0.0,
+        },
     ]
 }
 

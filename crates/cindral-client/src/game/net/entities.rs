@@ -370,6 +370,22 @@ pub(super) fn apply_entity_metadata(game: &mut Game, packet: &EntityMetadata) {
             game.hud_dirty = true;
         }
         game.overlays.apply_metadata(&packet.metadata);
+        // MCP `Entity.isSprinting` reads flag 3 of the data watcher, which
+        // the server's metadata overwrites: after a hit the server stops the
+        // sprint it tracks and says so, and the next tick starts the sprint
+        // again (with its modifier) while the keys are held, without a
+        // packet. Only the flag changes here, not the speed modifier
+        // (`Player::sprint_modifier`).
+        if let Some(flags) = packet.metadata.get_byte(0) {
+            tracing::debug!(
+                target: "tickdbg",
+                "META self at t={} flags={flags:#04x}",
+                game.status_data.ticks
+            );
+            if let Some(state) = game.state.as_mut() {
+                state.set_sprint_flag(flags & 0x08 != 0);
+            }
+        }
         // The data watcher of `EntityPlayerSP` gets every entry, such as the
         // arrows in the body (`LayerArrow`) drawn in the third person and the
         // inventory portrait; the store has no record of the local player.

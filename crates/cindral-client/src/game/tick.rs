@@ -129,6 +129,7 @@ pub(super) fn tick(
 ) {
     cindral_core::profile_scope!("game tick");
     let tick_start = Instant::now();
+    let tickdbg_from = queue.ordered.len();
     game.metrics.start_tick();
     game.status_data.ticks += 1;
     // `WorldClient.tick`: the time of day moves on between `Time Update`s.
@@ -292,6 +293,33 @@ pub(super) fn tick(
         report_movement(game, &intent, queue);
     }
     publish_chunks(game, chunks);
+    if tracing::enabled!(target: "tickdbg", tracing::Level::DEBUG) {
+        if let Some(state) = game.state.as_ref() {
+            let player = state.player();
+            let sent: Vec<String> = queue
+                .ordered
+                .iter()
+                .skip(tickdbg_from)
+                .map(|command| {
+                    let text = format!("{command:?}");
+                    text.chars().take(60).collect()
+                })
+                .collect();
+            tracing::debug!(
+                target: "tickdbg",
+                "t={} fwd={} spr_key={} sprinting={} ground={} v=({:.5},{:.5},{:.5}) sent={:?}",
+                game.status_data.ticks,
+                game.controls.input.forward,
+                game.controls.input.sprint,
+                player.sprinting,
+                player.on_ground,
+                player.velocity.x,
+                player.velocity.y,
+                player.velocity.z,
+                sent
+            );
+        }
+    }
 
     publish_frame(game, frames, tick_time);
     publish_sounds(game, frames);

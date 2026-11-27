@@ -263,6 +263,14 @@ pub struct Player {
     pub fall_distance: f32,
     /// Whether the player is sprinting.
     pub sprinting: bool,
+    /// Whether the movement speed attribute holds the sprint modifier.
+    ///
+    /// MCP `EntityLivingBase.setSprinting` removes the modifier and adds it
+    /// back when the sprint starts, and `NetHandlerPlayClient
+    /// .handleEntityProperties` replaces every modifier of the attribute
+    /// with the server's list, the sprint one included (MC-69459). The
+    /// movement reads this flag, not [`Player::sprinting`].
+    pub sprint_modifier: bool,
     /// Whether the player is sneaking.
     pub sneaking: bool,
     /// The ticks an enabled sprint still lasts
@@ -374,6 +382,7 @@ impl Default for Player {
             on_ground: false,
             fall_distance: 0.0,
             sprinting: false,
+            sprint_modifier: false,
             sneaking: false,
             sprinting_ticks_left: 0,
             sprint_toggle_timer: 0,
@@ -463,6 +472,7 @@ impl Player {
     /// when the sprint is enabled and clears it when it is disabled.
     pub fn set_sprinting(&mut self, sprinting: bool) {
         self.sprinting = sprinting;
+        self.sprint_modifier = sprinting;
         self.sprinting_ticks_left = if sprinting { SPRINT_DURATION_TICKS } else { 0 };
     }
 }
@@ -576,7 +586,7 @@ pub fn step<S: BlockSource + ?Sized>(player: &mut Player, intent: &InputIntent, 
 
     // The movement speed attribute is refreshed after the movement,
     // MCP `EntityPlayer.java:627-634`.
-    player.speed_multiplier = if player.sprinting {
+    player.speed_multiplier = if player.sprint_modifier {
         1.0 + SPRINT_SPEED_BONUS
     } else {
         1.0
@@ -1008,7 +1018,7 @@ fn move_flying(player: &mut Player, strafe: f32, forward: f32, speed: f32) {
 /// The movement speed the movement reads (MCP `EntityPlayer.getAIMoveSpeed`):
 /// the attribute with this tick's sprint modifier, narrowed to `float`.
 fn ai_move_speed(player: &Player) -> f32 {
-    let sprint = if player.sprinting {
+    let sprint = if player.sprint_modifier {
         1.0 + SPRINT_SPEED_BONUS
     } else {
         1.0
@@ -1827,6 +1837,47 @@ mod tests {
             "{}",
             player.fov_modifier
         );
+    }
+
+    /// MC-69459: the server's `Entity Properties` without the sprint
+    /// modifier (its answer to a `Stop Sprinting`) leaves a sprinting player
+    /// at walking speed until the sprint starts again; GrimAC predicts it.
+    #[test]
+    fn the_server_can_take_the_sprint_modifier_away() {
+        let (world, mut player) = settled_on_stone();
+        let intent = sprint_intent();
+        step(&mut player, &intent, &world);
+        step(&mut player, &intent, &world);
+        let sprinting_z = player.velocity.z;
+
+        let mut walker = player;
+        walker.sprint_modifier = false;
+        step(&mut walker, &intent, &world);
+        assert!(walker.sprinting, "the sprint itself goes on");
+        let mut runner = player;
+        step(&mut runner, &intent, &world);
+        // On the ground the sprint adds 0.03 * 0.98 to the acceleration.
+        let gap = runner.velocity.z - walker.velocity.z;
+        assert!(
+            (gap - 0.0294 * f64::from(super::GROUND_FRICTION) * 0.6).abs() < 1e-4,
+            "{gap}"
+        );
+        assert!(sprinting_z > 0.0);
+    }
+
+    /// After a hit the server stops the sprint it tracks and its metadata
+    /// clears the sprint flag (`Entity.isSprinting` reads the data watcher):
+    /// with the keys held, the next tick starts the sprint again and puts
+    /// the modifier back, so the player keeps the sprint speed.
+    #[test]
+    fn a_sprint_flag_cleared_by_the_server_starts_again_with_its_modifier() {
+        let (world, mut player) = settled_on_stone();
+        let intent = sprint_intent();
+        step(&mut player, &intent, &world);
+        player.sprinting = false;
+        player.sprint_modifier = false;
+        step(&mut player, &intent, &world);
+        assert!(player.sprinting && player.sprint_modifier);
     }
 
     fn sprint_intent() -> InputIntent {

@@ -478,6 +478,19 @@ impl GameState {
         }
     }
 
+    /// Sets the sprint flag from the server's metadata (MCP `Entity.setFlag`
+    /// through the data watcher): the speed modifier and the sprint timer
+    /// stay as they are.
+    pub fn set_sprint_flag(&mut self, sprinting: bool) {
+        self.player.sprinting = sprinting;
+    }
+
+    /// Sets the sprint modifier of the movement speed from a server
+    /// `Entity Properties` packet (`physics::Player::sprint_modifier`).
+    pub fn set_sprint_modifier(&mut self, present: bool) {
+        self.player.sprint_modifier = present;
+    }
+
     /// Slows the player and stops its sprint after a hit (MCP
     /// `EntityPlayer.attackTargetEntityWithCurrentItem`).
     pub fn reset_sprint(&mut self, reset: combat::SprintReset) {

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.4 — 27 November 2026
+
+### GrimAC: no more flags after a W-tap
+- Tested against GrimAC 2.3.75 on a local Spigot 1.8.8 server and a
+  Paper 26.3 server with ViaVersion/ViaRewind (the setup of most 1.8 PvP
+  networks), with two Cindral players fighting at 55 ms and at 120-170 ms
+  of ping: sprint hits, block hits, jump hits, W-taps and strafes.
+- Cindral 0.9.3 drew `Simulation` flags (and the setbacks that follow
+  them) after W-taps: 8 to 62 flags in two minutes, 51 at high ping. The
+  sprint speed now follows the server as in 1.8.9: the server's
+  `Entity Properties` replace the sprint modifier (MC-69459) and its
+  metadata clears the sprint flag after a hit, which the next tick starts
+  again. The same fights now draw no flag at all on 1.8.8, at both pings,
+  and one W-tap edge on the Via server that a vanilla client shares.
+
 ## 0.9.3 — 25 November 2026
 
 ### Anticheats

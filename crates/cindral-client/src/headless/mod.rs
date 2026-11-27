@@ -18,7 +18,10 @@ use crate::network::NetworkConfig;
 
 pub mod script;
 
-use script::{combat_script, default_script, idle_script, movement_script, Script, ScriptPhase};
+use script::{
+    combat_script, default_script, idle_script, movement_script, pvp_hold_script, pvp_script,
+    Script, ScriptPhase,
+};
 
 /// The summary of a headless session.
 #[derive(Debug, Default, Clone)]
@@ -213,6 +216,8 @@ fn phases(name: &str) -> Vec<ScriptPhase> {
         "idle" | "e1" | "e2" | "e3" | "e4" => idle_script(),
         "movement" => movement_script(),
         "combat" => combat_script(),
+        "pvp" => pvp_script(),
+        "pvp-hold" => pvp_hold_script(),
         _ => default_script(),
     }
 }
